@@ -19,6 +19,12 @@ export interface DocumentSnapshot {
   // them unread (rather than dropping them on save) avoids silently
   // destroying data the user didn't ask this app to touch.
   constraints: unknown[];
+  // Opaque passthrough for the 3D/drawing workspaces (part/types.ts owns the
+  // real schema, so this 2D core never imports any 3D code). Only emitted
+  // when present, so a pure-2D file stays byte-identical to the desktop
+  // app's own .jcad shape.
+  part?: unknown;
+  sheets?: unknown;
 }
 
 export interface ParseResult {
@@ -29,6 +35,9 @@ export interface ParseResult {
 export class Document {
   entities: Entity[] = [];
   constraints: unknown[] = [];
+  /** 3D part (sketches + feature history) -- see DocumentSnapshot.part. */
+  part: unknown = undefined;
+  sheets: unknown = undefined;
 
   addEntity(entity: Entity): void {
     if (!this.entities.includes(entity)) {
@@ -55,6 +64,8 @@ export class Document {
   clear(): void {
     this.entities = [];
     this.constraints = [];
+    this.part = undefined;
+    this.sheets = undefined;
   }
 
   getEntities(): Entity[] {
@@ -71,10 +82,13 @@ export class Document {
   }
 
   toDict(): DocumentSnapshot {
-    return {
+    const snapshot: DocumentSnapshot = {
       entities: this.entities.map((e) => e.serialize()),
       constraints: this.constraints,
     };
+    if (this.part !== undefined) snapshot.part = structuredClone(this.part);
+    if (this.sheets !== undefined) snapshot.sheets = structuredClone(this.sheets);
+    return snapshot;
   }
 
   /** Rebuilds this Document's entities/constraints IN PLACE (undo/redo, Load) so any
@@ -83,6 +97,8 @@ export class Document {
     const result = parseEntities(data.entities);
     this.entities = result.entities;
     this.constraints = data.constraints ?? [];
+    this.part = data.part === undefined ? undefined : structuredClone(data.part);
+    this.sheets = data.sheets === undefined ? undefined : structuredClone(data.sheets);
     return result;
   }
 }

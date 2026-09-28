@@ -2,16 +2,18 @@
  * MinimalCAD Web
  * commands/rectangle.ts
  *
- * Ported from commands/rectangle.py: two-corner rectangle -> 4 independent
- * Line entities (NOT a distinct Rectangle entity type, and NOT a closed
- * Polyline) -- required for exact file compatibility with the desktop app,
- * which does the same decomposition.
+ * Ported from commands/rectangle.py: two-corner rectangle -> ONE closed
+ * 4-vertex Polyline, so it selects/moves/grips as a single rectangle (the
+ * desktop app's 4 loose Lines behaved like an already-exploded shape).
+ * Still no dedicated Rectangle entity type -- a closed "polyline" is a type
+ * the desktop app and DXF export already understand. Explode gives back the
+ * 4 Lines when per-edge editing (fillet/offset/chamfer) is needed.
  */
 
 import type { Point } from "../core/types";
 import type { Engine } from "../engine/engine";
 import { BaseCommand } from "./base";
-import { Line } from "../entities/line";
+import { Polyline } from "../entities/polyline";
 import { drawGrip } from "../entities/style";
 import { parsePoint, parseTwoPositiveFloats } from "../input/dynamicInput";
 
@@ -78,10 +80,12 @@ export class RectangleCommand extends BaseCommand {
     const p2: Point = { x: c2.x, y: c1.y };
     const p3 = c2;
     const p4: Point = { x: c1.x, y: c2.y };
-    this.document.addEntity(new Line(p1, p2));
-    this.document.addEntity(new Line(p2, p3));
-    this.document.addEntity(new Line(p3, p4));
-    this.document.addEntity(new Line(p4, p1));
+    this.document.addEntity(
+      new Polyline(
+        [p1, p2, p3, p4].map((point) => ({ point, bulge: 0 })),
+        true,
+      ),
+    );
     this.start();
   }
 

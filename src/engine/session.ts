@@ -19,12 +19,29 @@ import { generateId } from "../core/id";
 import { Viewport } from "./viewport";
 import { Engine } from "./engine";
 import type { CommandBar } from "../ui/commandBar";
+import type { PlaneRef } from "../part/types";
+
+/** Which toolset a tab is showing -- see workspace/workspace.ts. The
+ *  existing 2D app is simply the "drafting" workspace. */
+export type Workspace = "drafting" | "model" | "sketch";
+
+/** A 3D part sketch open for editing: its own Engine+Viewport, so every 2D
+ *  command/osnap/grip works on it unchanged. Written back into
+ *  Document.part on Finish Sketch. */
+export interface SketchEdit {
+  readonly sketchId: string;
+  readonly plane: PlaneRef;
+  readonly engine: Engine;
+  readonly viewport: Viewport;
+}
 
 export interface TabSession {
   readonly id: string;
   name: string;
   readonly viewport: Viewport;
   readonly engine: Engine;
+  workspace: Workspace;
+  sketch: SketchEdit | null;
 }
 
 // Numbers new tabs "Untitled 1", "Untitled 2", ... for the lifetime of the
@@ -45,8 +62,21 @@ export function createTabSession(
   onCommandChanged: () => void,
 ): TabSession {
   untitledCounter++;
+  const { viewport, engine } = createEngine(getCanvasWidth, getCanvasHeight, commandBar, requestRedraw, onCommandChanged);
+  return { id: generateId(), name: `Untitled ${untitledCounter}`, viewport, engine, workspace: "drafting", sketch: null };
+}
+
+/** One homed Viewport + the Engine that owns it -- a tab's main drawing, or
+ *  a part sketch being edited (workspace/workspace.ts). */
+export function createEngine(
+  getCanvasWidth: () => number,
+  getCanvasHeight: () => number,
+  commandBar: CommandBar,
+  requestRedraw: () => void,
+  onCommandChanged: () => void,
+): { viewport: Viewport; engine: Engine } {
   const viewport = new Viewport(getCanvasWidth, getCanvasHeight);
   viewport.resetView();
   const engine = new Engine(viewport, commandBar, requestRedraw, onCommandChanged);
-  return { id: generateId(), name: `Untitled ${untitledCounter}`, viewport, engine };
+  return { viewport, engine };
 }

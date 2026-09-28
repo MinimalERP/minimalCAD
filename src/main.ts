@@ -25,6 +25,7 @@ import { refreshCloudPanel } from "./ui/cloudPanel";
 import { createTabSession } from "./engine/session";
 import type { TabSession } from "./engine/session";
 import type { Engine } from "./engine/engine";
+import { WorkspaceController } from "./workspace/workspace";
 
 const canvasElOrNull = document.getElementById("cad-canvas");
 if (!(canvasElOrNull instanceof HTMLCanvasElement)) {
@@ -41,6 +42,10 @@ const tabBarEl = document.getElementById("tab-bar");
 if (tabBarEl === null) throw new Error("#tab-bar element not found");
 const commandBarEl = document.getElementById("command-bar");
 if (commandBarEl === null) throw new Error("#command-bar element not found");
+const glCanvasEl = document.getElementById("gl-canvas");
+if (!(glCanvasEl instanceof HTMLCanvasElement)) throw new Error("#gl-canvas element not found");
+const modelBrowserEl = document.getElementById("model-browser");
+if (modelBrowserEl === null) throw new Error("#model-browser element not found");
 
 const commandBar = new CommandBar(commandBarEl);
 
@@ -79,7 +84,15 @@ function getActiveSession(): TabSession {
   return session;
 }
 
+/** The Engine input goes to: the part sketch being edited, if any, else
+ *  the tab's own drawing -- see workspace/workspace.ts. */
 function getActiveEngine(): Engine {
+  return workspace.activeEngine(getActiveSession());
+}
+
+/** The tab's own document owner (autosave/cloud always save the whole tab,
+ *  never just a sketch being edited). */
+function getTabEngine(): Engine {
   return getActiveSession().engine;
 }
 
@@ -99,7 +112,22 @@ const firstSession = newSession();
 sessions.push(firstSession);
 activeSessionId = firstSession.id;
 
+const workspace = new WorkspaceController({
+  canvasEl,
+  glCanvasEl,
+  browserEl: modelBrowserEl,
+  commandBar,
+  getView: () => view,
+  getSession: getActiveSession,
+  requestRedraw,
+  onCommandChanged,
+});
+
 commandBar.addEventListener("inputSubmitted", (e) => {
+  if (workspace.isModel()) {
+    workspace.textInput((e as CustomEvent<string>).detail);
+    return;
+  }
   getActiveEngine().commandManager.textInput((e as CustomEvent<string>).detail);
   // A typed value always wins over a finger still down mid touch point-pick
   // preview -- see canvasView.ts's own doc comment on this method.
@@ -107,6 +135,10 @@ commandBar.addEventListener("inputSubmitted", (e) => {
   view.requestRedraw();
 });
 commandBar.addEventListener("escapePressed", () => {
+  if (workspace.isModel()) {
+    workspace.escape();
+    return;
+  }
   getActiveEngine().cancelCommand();
   view.requestRedraw();
 });
@@ -117,7 +149,7 @@ commandBar.addEventListener("textChanged", () => view.requestRedraw());
 // command, or back at READY), hand keyboard focus back to the canvas so
 // Escape/Delete/single-letter typed commands keep working -- see
 // commandBar.ts's disableInput() doc comment.
-commandBar.addEventListener("inputDisabled", () => canvasEl.focus());
+commandBar.addEventListener("inputDisabled", () => (workspace.isModel() ? glCanvasEl : canvasEl).focus());
 commandBar.addEventListener("orthoClicked", () => {
   getActiveEngine().toggleOrtho();
 });
@@ -128,11 +160,14 @@ commandBar.addEventListener("orthoClicked", () => {
 // against it. The ResizeObserver in canvasView.ts's constructor is the
 // actual belt-and-braces fix for any *later* layout-driven size change;
 // this ordering just makes sure the very first sizing is already correct.
-buildToolbar(toolbarEl, getActiveEngine, () => view.requestRedraw());
+workspace.attachToolbar(buildToolbar(toolbarEl, getActiveEngine, () => view.requestRedraw(), workspace));
 
 view = new CanvasView(canvasEl, firstSession.viewport, firstSession.engine);
 
-initAutosave(getActiveEngine, () => view.requestRedraw());
+initAutosave(getTabEngine, () => {
+  view.requestRedraw();
+  workspace.documentChanged();
+});
 
 // --- Tab bar wiring: activate/createNew/close/rename all funnel through
 // here so `sessions`/`activeSessionId` stay the single source of truth. ---
@@ -145,11 +180,13 @@ function activateSession(id: string): void {
   // leave a stale "pick next point" prompt on a tab that's no longer
   // visible -- a no-op if that session was just removed by closeSession()
   // below (already gone from `sessions` by the time this runs).
-  sessions.find((s) => s.id === activeSessionId)?.engine.cancelCommand();
+  const outgoing = sessions.find((s) => s.id === activeSessionId);
+  outgoing?.engine.cancelCommand();
+  outgoing?.sketch?.engine.cancelCommand();
 
   activeSessionId = id;
   const session = getActiveSession();
-  view.setActiveSession(session.engine, session.viewport);
+  workspace.apply(session);
   commandBar.setReady();
   commandBar.setOrtho(session.engine.orthoEnabled);
   tabBar.refresh();
@@ -167,7 +204,7 @@ function createNewTab(): void {
  *  "has anything changed since the last save-equivalent point"), so closing
  *  a tab with real work in it always confirms first. */
 function hasUnsavedChanges(session: TabSession): boolean {
-  return session.engine.undo.dirty;
+  return session.engine.undo.dirty || (session.sketch?.engine.undo.dirty ?? false);
 }
 
 function closeSession(id: string): void {
@@ -188,6 +225,9 @@ function closeSession(id: string): void {
     session.engine.clearCloudDrawing();
     session.engine.cancelCommand();
     session.viewport.resetView();
+    session.sketch = null;
+    session.workspace = "drafting";
+    workspace.apply(session);
     view.requestRedraw();
     tabBar.refresh();
     refreshCloudPanel();
@@ -227,7 +267,10 @@ if (homeBtn !== null) {
   // Same focus-steal prevention as toolbar buttons -- see ui/toolbar.ts's
   // preventFocusSteal() doc comment.
   homeBtn.addEventListener("mousedown", (e) => e.preventDefault());
-  homeBtn.addEventListener("click", () => getActiveEngine().zoomExtents());
+  homeBtn.addEventListener("click", () => {
+    if (workspace.isModel()) workspace.modelAction("fit");
+    else getActiveEngine().zoomExtents();
+  });
 }
 
 // Touch-only ESC/Enter/Undo/Redo/Delete/Ortho overlay, plus a numeric keypad
@@ -247,8 +290,20 @@ function dispatchSyntheticKey(key: string): void {
 }
 
 const mobileControls: [string, () => void][] = [
-  ["mobile-undo", () => getActiveEngine().undoAction()],
-  ["mobile-redo", () => getActiveEngine().redoAction()],
+  [
+    "mobile-undo",
+    () => {
+      getActiveEngine().undoAction();
+      workspace.documentChanged();
+    },
+  ],
+  [
+    "mobile-redo",
+    () => {
+      getActiveEngine().redoAction();
+      workspace.documentChanged();
+    },
+  ],
   ["mobile-delete", () => getActiveEngine().deleteSelected()],
   ["mobile-ortho", () => getActiveEngine().toggleOrtho()],
   ["mobile-escape", () => dispatchSyntheticKey("Escape")],

@@ -1,0 +1,763 @@
+/**
+ * MinimalCAD Web
+ * view3d/modelView.ts
+ *
+ * Render layer for the 3D workspace (three.js, loaded lazily with the rest
+ * of view3d/ on the first switch to 3D -- the 2D app never downloads it).
+ *
+ * Pure display + picking: it is handed kernel Bodies and sketch geometry
+ * and draws them; it never owns or mutates the parametric model. The
+ * camera is orthographic (CAD-style: no perspective distortion, sizes read
+ * true in the standard views).
+ */
+
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import earcut from "earcut";
+import { ViewCube } from "./viewCube";
+import type { Body, Edge, TopoRef } from "../part/kernel/types";
+import type { Frame } from "../part/plane";
+import { localTo3d, planeFrame } from "../part/plane";
+import type { Region } from "../part/profile";
+import type { Point } from "../core/types";
+
+export type StandardView = "front" | "top" | "right" | "iso";
+
+const VIEW_NAMES: Record<StandardView, string> = {
+  front: "Front",
+  top: "Top",
+  right: "Right",
+  iso: "SE Isometric",
+};
+
+const BG = 0x1e1e1e; // same as the 2D canvas, so 2D <-> 3D feels like one space
+const GRID_MINOR = 0x2a2a2a;
+const GRID_MAJOR = 0x363636;
+const AXIS_X = 0xb03a3a;
+const AXIS_Y = 0x3a9a3a;
+const BODY_COLOR = 0xc3cad4;
+const EDGE_COLOR = 0x0b0b0b;
+const SKETCH_COLOR = 0xf0f0f0;
+const PLANE_COLOR = 0xe8b04a;
+const WORKPLANE_COLOR = 0x6fcf97;
+const REGION_COLOR = 0x3d8bfd;
+const PREVIEW_COLOR = 0x5fa8ff;
+
+export interface PickableRegion {
+  sketchId: string;
+  index: number;
+  region: Region;
+  frame: Frame;
+}
+
+/** A pickable plane: origin XY/XZ/YZ, or a work plane (by id). */
+export interface PlaneDisplay {
+  key: string;
+  frame: Frame;
+}
+
+type Hit =
+  | { kind: "plane"; key: string }
+  /** A flat face of a solid (sketch-on-face). */
+  | { kind: "face"; ref: TopoRef; body: Body; faceId: number }
+  | { kind: "region"; region: PickableRegion };
+
+function v3(p: { x: number; y: number; z: number }): THREE.Vector3 {
+  return new THREE.Vector3(p.x, p.y, p.z);
+}
+
+/** Analytic edge -> polyline points (arcs sampled finely: display only). */
+function edgePoints(edge: Edge): THREE.Vector3[] {
+  const g = edge.geom;
+  if (g.kind === "line") return [v3(g.a), v3(g.b)];
+  if (g.kind === "polyline") return g.pts.map(v3);
+  const center = v3(g.center);
+  const e1 = v3(g.start).sub(center).normalize();
+  const n = v3(g.normal).normalize();
+  const e2 = new THREE.Vector3().crossVectors(n, e1);
+  const steps = Math.max(8, Math.ceil((Math.abs(g.sweep) / (2 * Math.PI)) * 96));
+  const pts: THREE.Vector3[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = (g.sweep * i) / steps;
+    pts.push(
+      center
+        .clone()
+        .addScaledVector(e1, Math.cos(t) * g.radius)
+        .addScaledVector(e2, Math.sin(t) * g.radius),
+    );
+  }
+  return pts;
+}
+
+function segmentsGeometry(polylines: THREE.Vector3[][]): THREE.BufferGeometry {
+  const arr: number[] = [];
+  for (const pts of polylines) {
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i]!;
+      const b = pts[i + 1]!;
+      arr.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+  return geo;
+}
+
+function bodyGeometry(body: Body): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(body.mesh.positions, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(body.mesh.normals, 3));
+  geo.setIndex(new THREE.BufferAttribute(body.mesh.indices, 1));
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+function regionGeometry(region: Region, frame: Frame): THREE.BufferGeometry {
+  const flat: number[] = [];
+  const holes: number[] = [];
+  const pts: Point[] = [];
+  [region.outer, ...region.holes].forEach((loop, i) => {
+    if (i > 0) holes.push(pts.length);
+    for (const p of loop.polygon) {
+      flat.push(p.x, p.y);
+      pts.push(p);
+    }
+  });
+  const tris = earcut(flat, holes, 2);
+  const pos: number[] = [];
+  for (const p of pts) {
+    const w = localTo3d(frame, p, 0);
+    pos.push(w.x, w.y, w.z);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setIndex(tris);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+export class ModelView {
+  readonly canvas: HTMLCanvasElement;
+  private renderer: THREE.WebGLRenderer;
+  private scene = new THREE.Scene();
+  private camera: THREE.OrthographicCamera;
+  private controls: OrbitControls;
+  private raycaster = new THREE.Raycaster();
+
+  private contentGroup = new THREE.Group(); // bodies + edges
+  private sketchGroup = new THREE.Group(); // wireframes
+  private regionGroup = new THREE.Group(); // pickable profile fills
+  private previewGroup = new THREE.Group();
+  private originGroup = new THREE.Group();
+  private gridGroup = new THREE.Group();
+  private ucsIcon = new THREE.Group();
+  private viewCube: ViewCube;
+  private viewLabel: HTMLDivElement;
+  private workPlaneGroup = new THREE.Group();
+  private planeMeshes = new Map<string, THREE.Mesh>();
+  private originPlanesVisible = true;
+  private workPlanes: PlaneDisplay[] = [];
+  private regionMeshes: { mesh: THREE.Mesh; region: PickableRegion }[] = [];
+  private bodyMeshes: THREE.Mesh[] = [];
+  private faceHighlight = new THREE.Group();
+
+  private pickMode: "none" | "plane" | "region" = "none";
+  private hovered: Hit | null = null;
+  private selectedRegions = new Set<PickableRegion>();
+  private planeSize = 60;
+  private renderScheduled = false;
+  private downPos: { x: number; y: number } | null = null;
+  private orbiting = false;
+  private lastPolar = 0;
+  private lastAzimuth = 0;
+
+  /** Called on a click (not an orbit drag) that hit something pickable. */
+  onPick: ((hit: Hit) => void) | null = null;
+
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.scene.background = new THREE.Color(BG);
+
+    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100000);
+    // Z-up world, like AutoCAD (the 2D drawing is the XY ground plane). Must
+    // be set before OrbitControls is created -- it captures `up` once.
+    this.camera.up.set(0, 0, 1);
+    this.scene.add(this.camera);
+    const key = new THREE.DirectionalLight(0xffffff, 2.2);
+    key.position.set(0.5, 0.8, 1);
+    this.camera.add(key); // headlight: lighting follows the view
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x404048, 1.4));
+
+    this.controls = new OrbitControls(this.camera, canvas);
+    this.controls.enableDamping = false;
+    this.controls.zoomToCursor = true;
+    this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
+    this.controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+    this.controls.addEventListener("change", () => this.requestRender());
+    // Any manual orbit turns the named view into a custom one, as in AutoCAD.
+    this.controls.addEventListener("start", () => {
+      this.orbiting = true;
+    });
+    this.controls.addEventListener("end", () => {
+      this.orbiting = false;
+    });
+    this.controls.addEventListener("change", () => {
+      const polar = this.controls.getPolarAngle();
+      const azimuth = this.controls.getAzimuthalAngle();
+      // Zoom/pan keep the named view; only a real rotation makes it custom.
+      if (this.orbiting && (Math.abs(polar - this.lastPolar) > 1e-4 || Math.abs(azimuth - this.lastAzimuth) > 1e-4)) {
+        this.setViewName("Custom View");
+      }
+      this.lastPolar = polar;
+      this.lastAzimuth = azimuth;
+    });
+
+    const parent = canvas.parentElement!;
+    this.viewLabel = document.createElement("div");
+    this.viewLabel.className = "v3d-overlay view-label";
+    parent.appendChild(this.viewLabel);
+    this.viewCube = new ViewCube(parent);
+    this.viewCube.onPick = (dir) => {
+      this.frame(dir);
+      this.setViewName(namedDirection(dir));
+    };
+    this.viewCube.onHome = () => this.setView("iso");
+
+    this.scene.add(
+      this.faceHighlight,
+      this.gridGroup,
+      this.ucsIcon,
+      this.originGroup,
+      this.workPlaneGroup,
+      this.contentGroup,
+      this.sketchGroup,
+      this.regionGroup,
+      this.previewGroup,
+    );
+    this.buildOrigin();
+
+    new ResizeObserver(() => this.resize()).observe(canvas);
+    canvas.addEventListener("pointerdown", (e) => {
+      this.downPos = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener("pointermove", (e) => this.onHover(e));
+    canvas.addEventListener("pointerup", (e) => {
+      const down = this.downPos;
+      this.downPos = null;
+      if (down === null || e.button !== 0) return;
+      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return; // was an orbit drag
+      const hit = this.pick(e);
+      if (hit !== null) this.onPick?.(hit);
+    });
+
+    // Double-clicking a work plane sketches on it directly (no command needed).
+    canvas.addEventListener("dblclick", (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      this.raycaster.setFromCamera(
+        new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1),
+        this.camera,
+      );
+      const hit = this.raycaster.intersectObjects(this.workPlaneGroup.children, false)[0];
+      if (hit !== undefined) this.onPlaneDoubleClick?.(hit.object.userData.key as string);
+    });
+
+    this.resize();
+    this.setView("iso");
+    // Dev-only handle for poking at the live view from the browser console.
+    if (import.meta.env.DEV) (window as unknown as { __modelView?: ModelView }).__modelView = this;
+  }
+
+  onPlaneDoubleClick: ((key: string) => void) | null = null;
+
+  // --- origin planes & axes ---
+
+  /** Translucent square for a plane frame: centered on its origin, or --
+   *  `corner` -- spanning its positive quadrant, so the three origin planes
+   *  meet at the UCS like the corner of a room. */
+  private planeMesh(key: string, frame: Frame, color: number, corner = false, size = this.planeSize): THREE.Mesh {
+    const [a, b] = corner ? [0, size] : [-size / 2, size / 2];
+    const corners = [
+      { x: a, y: a },
+      { x: b, y: a },
+      { x: b, y: b },
+      { x: a, y: b },
+    ].map((p) => v3(localTo3d(frame, p)));
+    const geo = new THREE.BufferGeometry().setFromPoints(corners);
+    geo.setIndex([0, 1, 2, 0, 2, 3]);
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.06, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    mesh.userData.key = key;
+    mesh.add(
+      new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(corners),
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.45 }),
+      ),
+    );
+    return mesh;
+  }
+
+  private buildOrigin(): void {
+    disposeChildren(this.originGroup);
+    for (const key of [...this.planeMeshes.keys()]) if (!key.startsWith("wp:")) this.planeMeshes.delete(key);
+    for (const base of ["XY", "XZ", "YZ"] as const) {
+      // Unit size: originGroup is rescaled every frame to a constant on-screen size.
+      const mesh = this.planeMesh(base, planeFrame({ base, offset: 0 }), PLANE_COLOR, true, 1);
+      mesh.visible = this.originPlanesVisible;
+      this.planeMeshes.set(base, mesh);
+      this.originGroup.add(mesh);
+    }
+    this.buildGrid();
+    this.styleHover();
+  }
+
+  /** AutoCAD-style ground grid on XY, with red X / green Y axis lines
+   *  running through the origin across the whole grid. */
+  private buildGrid(): void {
+    disposeChildren(this.gridGroup);
+    const extent = Math.max(200, this.planeSize * 8);
+    const step = extent > 2000 ? 100 : extent > 400 ? 10 : 5;
+    const half = Math.ceil(extent / 2 / (step * 10)) * step * 10;
+    const minor: number[] = [];
+    const major: number[] = [];
+    for (let v = -half; v <= half + 1e-9; v += step) {
+      if (Math.abs(v) < 1e-9) continue; // axis lines drawn separately
+      const target = Math.round(v / step) % 10 === 0 ? major : minor;
+      target.push(v, -half, 0, v, half, 0, -half, v, 0, half, v, 0);
+    }
+    const lines = (arr: number[], color: number): THREE.LineSegments => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+      return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color }));
+    };
+    this.gridGroup.add(lines(minor, GRID_MINOR), lines(major, GRID_MAJOR));
+    this.gridGroup.add(lines([-half, 0, 0, half, 0, 0], AXIS_X), lines([0, -half, 0, 0, half, 0], AXIS_Y));
+    // Grid sits a hair below Z=0 so 2D geometry on the ground always wins.
+    this.gridGroup.position.z = -0.01;
+    this.buildUcsIcon();
+  }
+
+  /** X/Y/Z tripod at the origin, kept a constant size on screen (render()). */
+  private buildUcsIcon(): void {
+    disposeChildren(this.ucsIcon);
+    const axes: [THREE.Vector3, string][] = [
+      [new THREE.Vector3(1, 0, 0), "X"],
+      [new THREE.Vector3(0, 1, 0), "Y"],
+      [new THREE.Vector3(0, 0, 1), "Z"],
+    ];
+    const mat = new THREE.LineBasicMaterial({ color: 0xe0e0e0, depthTest: false });
+    for (const [dir, label] of axes) {
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), dir]), mat);
+      line.renderOrder = 10;
+      this.ucsIcon.add(line);
+      this.ucsIcon.add(textSprite(label, dir.clone().multiplyScalar(1.22)));
+    }
+    const box = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(-0.06, -0.06, 0),
+        new THREE.Vector3(0.06, -0.06, 0),
+        new THREE.Vector3(0.06, 0.06, 0),
+        new THREE.Vector3(-0.06, 0.06, 0),
+      ]),
+      mat,
+    );
+    this.ucsIcon.add(box);
+  }
+
+  private setViewName(name: string): void {
+
+    this.viewLabel.textContent = `[-][${name}][Shaded with Edges]`;
+  }
+
+  setOriginPlanesVisible(visible: boolean): void {
+    this.originPlanesVisible = visible;
+    for (const base of ["XY", "XZ", "YZ"]) {
+      const mesh = this.planeMeshes.get(base);
+      if (mesh !== undefined) mesh.visible = visible;
+    }
+    this.requestRender();
+  }
+
+  /** Work planes are always shown (and pickable for New Sketch), keyed by id. */
+  setWorkPlanes(planes: readonly PlaneDisplay[]): void {
+    this.workPlanes = planes.slice();
+    disposeChildren(this.workPlaneGroup);
+    for (const key of [...this.planeMeshes.keys()]) if (key.startsWith("wp:")) this.planeMeshes.delete(key);
+    for (const p of planes) {
+      const mesh = this.planeMesh(p.key, p.frame, WORKPLANE_COLOR);
+      this.planeMeshes.set(`wp:${p.key}`, mesh);
+      this.workPlaneGroup.add(mesh);
+    }
+    this.styleHover();
+  }
+
+  /** Live preview of a work plane being defined (null clears). */
+  setPlanePreview(frame: Frame | null): void {
+    const old = this.previewGroup.children.find((c) => c.userData.key === "__planePreview");
+    if (old !== undefined) {
+      disposeChildren(old);
+      this.previewGroup.remove(old);
+    }
+    if (frame !== null) {
+      const mesh = this.planeMesh("__planePreview", frame, WORKPLANE_COLOR);
+      (mesh.material as THREE.MeshBasicMaterial).opacity = 0.3;
+      this.previewGroup.add(mesh);
+    }
+    this.requestRender();
+  }
+
+  // --- content ---
+
+  setBodies(bodies: readonly Body[]): void {
+    disposeChildren(this.contentGroup);
+    this.bodyMeshes = [];
+    for (const body of bodies) {
+      const mesh = new THREE.Mesh(
+        bodyGeometry(body),
+        new THREE.MeshStandardMaterial({
+          color: BODY_COLOR,
+          metalness: 0.15,
+          roughness: 0.55,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 1,
+        }),
+      );
+      mesh.userData.body = body;
+      this.bodyMeshes.push(mesh);
+      this.contentGroup.add(mesh);
+      this.contentGroup.add(
+        new THREE.LineSegments(
+          segmentsGeometry(body.edges.map(edgePoints)),
+          new THREE.LineBasicMaterial({ color: EDGE_COLOR }),
+        ),
+      );
+    }
+    this.requestRender();
+  }
+
+  /** Visible sketch wireframes, in plane-local polylines + their frame. */
+  setSketches(sketches: readonly { frame: Frame; polylines: Point[][] }[]): void {
+    disposeChildren(this.sketchGroup);
+    for (const { frame, polylines } of sketches) {
+      this.sketchGroup.add(
+        new THREE.LineSegments(
+          segmentsGeometry(polylines.map((pl) => pl.map((p) => v3(localTo3d(frame, p))))),
+          new THREE.LineBasicMaterial({ color: SKETCH_COLOR }),
+        ),
+      );
+    }
+    this.requestRender();
+  }
+
+  setPreview(body: Body | null): void {
+    disposeChildren(this.previewGroup);
+    if (body !== null) {
+      this.previewGroup.add(
+        new THREE.Mesh(
+          bodyGeometry(body),
+          new THREE.MeshStandardMaterial({
+            color: PREVIEW_COLOR,
+            transparent: true,
+            opacity: 0.55,
+            depthWrite: false,
+          }),
+        ),
+      );
+      this.previewGroup.add(
+        new THREE.LineSegments(
+          segmentsGeometry(body.edges.map(edgePoints)),
+          new THREE.LineBasicMaterial({ color: 0x9cc8ff }),
+        ),
+      );
+    }
+    this.requestRender();
+  }
+
+  // --- picking ---
+
+  setPickMode(mode: "none" | "plane" | "region", regions: readonly PickableRegion[] = []): void {
+    this.pickMode = mode;
+    this.hovered = null;
+    this.selectedRegions.clear();
+    disposeChildren(this.regionGroup);
+    this.regionMeshes = [];
+    if (mode === "region") {
+      for (const region of regions) {
+        const mesh = new THREE.Mesh(
+          regionGeometry(region.region, region.frame),
+          new THREE.MeshBasicMaterial({
+            color: REGION_COLOR,
+            transparent: true,
+            opacity: 0.18,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+          }),
+        );
+        this.regionGroup.add(mesh);
+        this.regionMeshes.push({ mesh, region });
+      }
+    }
+    this.styleHover();
+  }
+
+  setSelectedRegions(regions: Iterable<PickableRegion>): void {
+    this.selectedRegions = new Set(regions);
+    this.styleHover();
+  }
+
+  private pick(e: PointerEvent): Hit | null {
+    if (this.pickMode === "none") return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    if (this.pickMode === "plane") {
+      // Nearest of: origin/work planes, or a FLAT face of a solid.
+      const hits = this.raycaster.intersectObjects(
+        [...[...this.planeMeshes.values()].filter((m) => m.visible), ...this.bodyMeshes],
+        false,
+      );
+      for (const h of hits) {
+        const body = h.object.userData.body as Body | undefined;
+        if (body === undefined) return { kind: "plane", key: h.object.userData.key as string };
+        const faceId = h.faceIndex == null ? undefined : body.mesh.faceIds[h.faceIndex];
+        const face = faceId === undefined ? undefined : body.faces[faceId];
+        if (face?.geom.kind === "plane") return { kind: "face", ref: face.ref, body, faceId: face.id };
+        return null; // a curved face is in front: nothing sketchable here
+      }
+      return null;
+    }
+    const hits = this.raycaster.intersectObjects(
+      this.regionMeshes.map((r) => r.mesh),
+      false,
+    );
+    // Smallest region under the cursor wins (a region inside another's hole).
+    const candidates = hits
+      .map((h) => this.regionMeshes.find((r) => r.mesh === h.object)!.region)
+      .sort((a, b) => a.region.area - b.region.area);
+    const first = candidates[0];
+    return first === undefined ? null : { kind: "region", region: first };
+  }
+
+  private onHover(e: PointerEvent): void {
+    if (this.pickMode === "none" || this.downPos !== null) return;
+    const hit = this.pick(e);
+    const same =
+      (hit === null && this.hovered === null) ||
+      (hit?.kind === "plane" && this.hovered?.kind === "plane" && hit.key === this.hovered.key) ||
+      (hit?.kind === "face" && this.hovered?.kind === "face" && hit.body === this.hovered.body && hit.faceId === this.hovered.faceId) ||
+      (hit?.kind === "region" && this.hovered?.kind === "region" && hit.region === this.hovered.region);
+    if (same) return;
+    this.hovered = hit;
+    this.canvas.style.cursor = hit === null ? "" : "pointer";
+    this.styleHover();
+  }
+
+  /** Tints the hovered solid face (sketch-on-face picking). */
+  private highlightFace(hit: Hit | null): void {
+    disposeChildren(this.faceHighlight);
+    if (hit?.kind !== "face") return;
+    const { positions, indices, faceIds } = hit.body.mesh;
+    const tri: number[] = [];
+    for (let t = 0; t < faceIds.length; t++) {
+      if (faceIds[t] !== hit.faceId) continue;
+      for (let k = 0; k < 3; k++) {
+        const i = indices[t * 3 + k]!;
+        tri.push(positions[i * 3]!, positions[i * 3 + 1]!, positions[i * 3 + 2]!);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(tri, 3));
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({
+        color: WORKPLANE_COLOR,
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      }),
+    );
+    this.faceHighlight.add(mesh);
+  }
+
+  private styleHover(): void {
+    this.highlightFace(this.pickMode === "plane" ? this.hovered : null);
+    for (const mesh of this.planeMeshes.values()) {
+      const hot = this.pickMode === "plane" && this.hovered?.kind === "plane" && this.hovered.key === mesh.userData.key;
+      (mesh.material as THREE.MeshBasicMaterial).opacity = hot ? 0.4 : this.pickMode === "plane" ? 0.18 : 0.08;
+    }
+    for (const { mesh, region } of this.regionMeshes) {
+      const hot = this.hovered?.kind === "region" && this.hovered.region === region;
+      const selected = this.selectedRegions.has(region);
+      (mesh.material as THREE.MeshBasicMaterial).opacity = selected ? 0.6 : hot ? 0.4 : 0.18;
+    }
+    this.requestRender();
+  }
+
+  // --- camera ---
+
+  /** World-space bounds of everything worth framing. */
+  private contentBox(): THREE.Box3 {
+    const box = new THREE.Box3();
+    for (const group of [this.contentGroup, this.sketchGroup, this.previewGroup]) box.expandByObject(group);
+    if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(60, 60, 60));
+    return box;
+  }
+
+  /** Resizes the origin planes to suit the model's scale. */
+  updateOriginScale(): void {
+    const size = this.contentBox().getSize(new THREE.Vector3()).length();
+    const next = Math.max(40, Math.ceil((size * 0.5) / 10) * 10);
+    if (next !== this.planeSize) {
+      this.planeSize = next;
+      this.buildOrigin();
+      this.setWorkPlanes(this.workPlanes);
+    }
+  }
+
+  setView(view: StandardView): void {
+    const dirs: Record<StandardView, THREE.Vector3> = {
+      front: new THREE.Vector3(0, -1, 0),
+      // Not exactly +Z: OrbitControls keeps camera.up = +Z, which is
+      // degenerate looking straight down. This still reads as a true plan
+      // view -- the same view as the 2D workspace (X right, Y up).
+      top: new THREE.Vector3(0, -1e-6, 1),
+      right: new THREE.Vector3(1, 0, 0),
+      iso: new THREE.Vector3(1, -1, 1), // AutoCAD's SE isometric
+    };
+    this.frame(dirs[view].normalize());
+    this.setViewName(VIEW_NAMES[view]);
+  }
+
+  /** Zooms to fit (keeping the view direction) only when the model isn't
+   *  comfortably in view -- partly off-screen, or too small to read. Used on
+   *  every switch into 3D, so what you just drew in 2D is always framed. */
+  fitIfNeeded(): void {
+    const box = this.contentBox();
+    this.camera.updateMatrixWorld();
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const x of [box.min.x, box.max.x]) {
+      for (const y of [box.min.y, box.max.y]) {
+        for (const z of [box.min.z, box.max.z]) {
+          const p = new THREE.Vector3(x, y, z).project(this.camera);
+          minX = Math.min(minX, p.x);
+          maxX = Math.max(maxX, p.x);
+          minY = Math.min(minY, p.y);
+          maxY = Math.max(maxY, p.y);
+        }
+      }
+    }
+    const outside = minX < -1 || maxX > 1 || minY < -1 || maxY > 1;
+    const tiny = Math.max(maxX - minX, maxY - minY) < 0.25;
+    if (outside || tiny) this.fit();
+  }
+
+  fit(): void {
+    this.frame(this.camera.position.clone().sub(this.controls.target).normalize());
+  }
+
+  private frame(dir: THREE.Vector3): void {
+    // Straight down/up is degenerate for a Z-up orbit camera: nudge it.
+    if (Math.abs(dir.z) > 0.99999) dir = new THREE.Vector3(0, -1e-6, Math.sign(dir.z)).normalize();
+    const sphere = this.contentBox().getBoundingSphere(new THREE.Sphere());
+    const r = Math.max(sphere.radius, 1);
+    const dist = r * 4 + 100;
+    this.controls.target.copy(sphere.center);
+    this.camera.position.copy(sphere.center).addScaledVector(dir, dist);
+    this.camera.near = 0.1;
+    this.camera.far = dist + r * 4 + 1000;
+    const { width, height } = this.size();
+    this.camera.zoom = Math.min(width, height) / (2.3 * r);
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.requestRender();
+  }
+
+  private size(): { width: number; height: number } {
+    return { width: Math.max(1, this.canvas.clientWidth), height: Math.max(1, this.canvas.clientHeight) };
+  }
+
+  resize(): void {
+    const { width, height } = this.size();
+    this.renderer.setSize(width, height, false);
+    this.camera.left = -width / 2;
+    this.camera.right = width / 2;
+    this.camera.top = height / 2;
+    this.camera.bottom = -height / 2;
+    this.camera.updateProjectionMatrix();
+    this.requestRender();
+  }
+
+  requestRender(): void {
+    if (this.renderScheduled) return;
+    this.renderScheduled = true;
+    requestAnimationFrame(() => {
+      this.renderScheduled = false;
+      // Constant on-screen UCS icon size: ortho world units per pixel = 1/zoom.
+      this.ucsIcon.scale.setScalar(55 / this.camera.zoom);
+      this.originGroup.scale.setScalar(95 / this.camera.zoom);
+      this.renderer.render(this.scene, this.camera);
+      this.viewCube.sync(this.camera, this.controls.target);
+    });
+  }
+}
+
+/** Name of an axis-aligned view direction (for the view label). */
+function namedDirection(d: THREE.Vector3): string {
+  const near = (x: number, y: number, z: number): boolean => d.distanceTo(new THREE.Vector3(x, y, z).normalize()) < 1e-6;
+  if (near(0, 0, 1)) return "Top";
+  if (near(0, 0, -1)) return "Bottom";
+  if (near(0, -1, 0)) return "Front";
+  if (near(0, 1, 0)) return "Back";
+  if (near(1, 0, 0)) return "Right";
+  if (near(-1, 0, 0)) return "Left";
+  if (near(1, -1, 1)) return "SE Isometric";
+  if (near(-1, -1, 1)) return "SW Isometric";
+  if (near(1, 1, 1)) return "NE Isometric";
+  if (near(-1, 1, 1)) return "NW Isometric";
+  return "Custom View";
+}
+
+function textSprite(text: string, position: THREE.Vector3): THREE.Sprite {
+  const c = document.createElement("canvas");
+  c.width = 64;
+  c.height = 64;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#e0e0e0";
+  ctx.font = "40px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 32, 34);
+  const tex = new THREE.CanvasTexture(c);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  sprite.position.copy(position);
+  sprite.scale.setScalar(0.32);
+  sprite.renderOrder = 10;
+  return sprite;
+}
+
+function disposeChildren(group: THREE.Object3D): void {
+  for (const child of [...group.children]) {
+    child.traverse((o) => {
+      const obj = o as THREE.Mesh;
+      obj.geometry?.dispose();
+      const mat = obj.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else mat?.dispose();
+    });
+    group.remove(child);
+  }
+}

@@ -24,6 +24,8 @@ import type { CommandBar } from "../ui/commandBar";
 import { CommandManager } from "../commands/manager";
 import type { Constraint } from "../core/constraints";
 import { QuickEditController } from "./quickEdit";
+import type { Entity } from "../entities/entity";
+import { boundsOf } from "../core/document";
 
 export interface SnapResult {
   point: Point;
@@ -40,6 +42,15 @@ export class Engine {
   readonly quickEdit: QuickEditController;
 
   orthoEnabled = false;
+
+  /** Reference-only geometry drawn dimmed behind the document and offered
+   *  to osnap -- e.g. a 3D solid's edges projected onto the sketch plane
+   *  being edited (view3d/). Never selectable, never saved, never undone. */
+  underlay: Entity[] = [];
+
+  /** Axis names for the 2D UCS icon: which 3D axes this drawing's screen
+   *  right/up are -- X/Y for the base drawing, e.g. X/Z on a Front sketch. */
+  ucsLabels: [string, string] = ["X", "Y"];
 
   /** The currently-picked distance constraint's id (see core/constraints.ts),
    *  or null -- a constraint isn't a document entity and has its own
@@ -101,7 +112,8 @@ export class Engine {
    *  a line's start point) enables the direction-dependent Perpendicular/
    *  Tangent osnaps. */
   snap(worldPos: Point, referencePoint: Point | null = null): SnapResult {
-    const match = findSnap(worldPos, this.document.getEntities(), this.pickTolerance(10.0), referencePoint);
+    const candidates = this.underlay.length > 0 ? [...this.document.getEntities(), ...this.underlay] : this.document.getEntities();
+    const match = findSnap(worldPos, candidates, this.pickTolerance(10.0), referencePoint);
     this.activeSnapPoint = match?.point ?? null;
     this.activeSnapType = match?.snapType ?? null;
     this.commandBar.setSnap(this.activeSnapType);
@@ -153,7 +165,8 @@ export class Engine {
   }
 
   zoomExtents(): void {
-    this.viewport.zoomExtents(this.document.entities.length > 0 ? this.document.getBounds() : null);
+    const all = [...this.document.entities, ...this.underlay];
+    this.viewport.zoomExtents(all.length > 0 ? boundsOf(all) : null);
     this.requestRedraw();
   }
 

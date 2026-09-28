@@ -402,7 +402,87 @@ function drawCloud(ctx: CanvasRenderingContext2D): void {
   ctx.stroke();
 }
 
+// --- 3D / sketch workspace ---
+
+/** Parallelogram "plane" seen at an angle -- shared by the sketch icons. */
+function planeOutline(ctx: CanvasRenderingContext2D): void {
+  ctx.beginPath();
+  ctx.moveTo(1, 15);
+  ctx.lineTo(6, 10);
+  ctx.lineTo(19, 10);
+  ctx.lineTo(14, 15);
+  ctx.closePath();
+  ctx.stroke();
+}
+
+function drawNewSketch(ctx: CanvasRenderingContext2D): void {
+  planeOutline(ctx);
+  line(ctx, 9, 12.5, 16, 2);
+  line(ctx, 16, 2, 18, 3.5);
+  line(ctx, 18, 3.5, 11, 13.5);
+}
+
+function drawFinishSketch(ctx: CanvasRenderingContext2D): void {
+  planeOutline(ctx);
+  ctx.strokeStyle = "#4caf50";
+  ctx.lineWidth = 2;
+  line(ctx, 6, 5, 9, 8);
+  line(ctx, 9, 8, 16, 1);
+}
+
+function drawExtrude(ctx: CanvasRenderingContext2D): void {
+  ctx.strokeRect(2, 8, 12, 9);
+  line(ctx, 2, 8, 6, 5);
+  line(ctx, 14, 8, 18, 5);
+  line(ctx, 6, 5, 18, 5);
+  line(ctx, 18, 5, 18, 14);
+  line(ctx, 14, 17, 18, 14);
+  line(ctx, 8, 13, 8, 1);
+  arrowhead(ctx, 8, 1, -90);
+}
+
+function drawWorkPlane(ctx: CanvasRenderingContext2D): void {
+  // tilted plane over a dashed base plane
+  dashed(ctx, () => planeOutline(ctx));
+  ctx.beginPath();
+  ctx.moveTo(3, 11);
+  ctx.lineTo(9, 3);
+  ctx.lineTo(19, 5);
+  ctx.lineTo(13, 13);
+  ctx.closePath();
+  ctx.stroke();
+}
+
+/** Cube in one of the standard orientations, `face` highlighted. */
+function viewCube(face: "front" | "top" | "right" | "iso"): Drawer {
+  return (ctx) => {
+    const front: [number, number][] = [[3, 8], [13, 8], [13, 18], [3, 18]];
+    const top: [number, number][] = [[3, 8], [8, 3], [18, 3], [13, 8]];
+    const right: [number, number][] = [[13, 8], [18, 3], [18, 13], [13, 18]];
+    const path = (pts: [number, number][]): void => {
+      ctx.beginPath();
+      ctx.moveTo(pts[0]![0], pts[0]![1]);
+      for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+      ctx.closePath();
+    };
+    ctx.fillStyle = "rgba(90,160,255,0.75)";
+    for (const [name, pts] of [["front", front], ["top", top], ["right", right]] as const) {
+      path(pts);
+      if (face === name || face === "iso") ctx.fill();
+      ctx.stroke();
+    }
+  };
+}
+
 const DRAWERS: Record<string, Drawer> = {
+  newsketch: drawNewSketch,
+  finishsketch: drawFinishSketch,
+  extrude: drawExtrude,
+  workplane: drawWorkPlane,
+  viewfront: viewCube("front"),
+  viewtop: viewCube("top"),
+  viewright: viewCube("right"),
+  viewiso: viewCube("iso"),
   line: drawLine,
   arc: drawArc,
   rectangle: drawRectangle,

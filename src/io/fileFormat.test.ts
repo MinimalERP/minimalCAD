@@ -73,3 +73,40 @@ describe("validateDocumentSnapshot", () => {
     expect(result).toEqual({ ok: true, snapshot: { entities: [], constraints: [] } });
   });
 });
+
+describe("3D part passthrough", () => {
+  it("omits part/sheets keys entirely for a pure-2D document", () => {
+    const doc = new Document();
+    doc.addEntity(new Line({ x: 0, y: 0 }, { x: 1, y: 1 }));
+    const obj = JSON.parse(serializeDocument(doc)) as Record<string, unknown>;
+    expect(Object.keys(obj).sort()).toEqual(["constraints", "entities", "version"]);
+  });
+
+  it("round-trips part and sheets through save -> parse -> restore", () => {
+    const part = { schema: 1, units: "mm", parameters: [], sketches: [], features: [{ id: "Extrude001" }] };
+    const doc = new Document();
+    doc.part = part;
+    doc.sheets = [{ id: "Sheet1" }];
+    const result = parseDocumentJson(serializeDocument(doc));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const restored = new Document();
+    restored.restoreFromDict(result.snapshot);
+    expect(restored.part).toEqual(part);
+    expect(restored.sheets).toEqual([{ id: "Sheet1" }]);
+  });
+
+  it("ignores a malformed part value instead of failing the load", () => {
+    const result = validateDocumentSnapshot({ entities: [], part: [1, 2] });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.snapshot.part).toBeUndefined();
+  });
+
+  it("snapshots are deep copies, so later part edits don't mutate undo history", () => {
+    const doc = new Document();
+    doc.part = { features: [] as unknown[] };
+    const snap = doc.toDict();
+    (doc.part as { features: unknown[] }).features.push({ id: "x" });
+    expect((snap.part as { features: unknown[] }).features).toHaveLength(0);
+  });
+});

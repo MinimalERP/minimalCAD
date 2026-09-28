@@ -47,7 +47,12 @@ export function validateDocumentSnapshot(raw: unknown): ParseJsonResult {
   const entities = Array.isArray(obj.entities) ? (obj.entities as Record<string, unknown>[]) : [];
   const constraints = Array.isArray(obj.constraints) ? obj.constraints : [];
 
-  return { ok: true, snapshot: { entities, constraints } };
+  const snapshot: DocumentSnapshot = { entities, constraints };
+  // 3D part / drawing sheets: passed through as-is (part/types.ts's
+  // parsePart() does the real validation when the 3D workspace loads it).
+  if (typeof obj.part === "object" && obj.part !== null && !Array.isArray(obj.part)) snapshot.part = obj.part;
+  if (Array.isArray(obj.sheets)) snapshot.sheets = obj.sheets;
+  return { ok: true, snapshot };
 }
 
 /** Parses raw JSON text (a local .jcad/.json file's contents) into a

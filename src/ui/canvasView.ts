@@ -939,6 +939,54 @@ export class CanvasView {
     }
   }
 
+  /** AutoCAD-style UCS icon: sits on the origin while it's on screen,
+   *  otherwise parks in the bottom-left corner -- so you always know which
+   *  way X/Y (or the sketch plane's own axes) run. */
+  private drawUcsIcon(): void {
+    const ctx = this.ctx;
+    const width = this.canvas.clientWidth;
+    const height = this.canvas.clientHeight;
+    const SIZE = 38;
+    const MARGIN = 28;
+    const o = this.viewport.worldToScreen({ x: 0, y: 0 });
+    const onScreen = o.x >= MARGIN && o.x <= width - SIZE - MARGIN && o.y >= SIZE + MARGIN && o.y <= height - MARGIN;
+    const x = onScreen ? o.x : MARGIN;
+    const y = onScreen ? o.y : height - MARGIN;
+    const [xLabel, yLabel] = this.engine.ucsLabels;
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(220, 220, 220, 0.85)";
+    ctx.fillStyle = "rgba(220, 220, 220, 0.85)";
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + SIZE, y);
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - SIZE);
+    ctx.stroke();
+    ctx.strokeRect(x - 3, y - 3, 6, 6);
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(xLabel, x + SIZE + 4, y);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(yLabel, x, y - SIZE - 3);
+    ctx.restore();
+  }
+
+  /** Engine.underlay: reference geometry (e.g. a projected 3D solid),
+   *  dimmed so it reads as "not part of this drawing". */
+  private drawUnderlay(): void {
+    const underlay = this.engine.underlay;
+    if (underlay.length === 0) return;
+    this.ctx.save();
+    this.ctx.globalAlpha = 0.35;
+    for (const entity of underlay) entity.draw(this.ctx, this.viewport);
+    this.ctx.restore();
+  }
+
   private render(): void {
     const dpr = window.devicePixelRatio || 1;
     const width = this.canvas.clientWidth;
@@ -952,12 +1000,14 @@ export class CanvasView {
     ctx.fillRect(0, 0, width, height);
 
     this.drawGrid();
+    this.drawUnderlay();
     this.drawEntities();
     this.drawConstraints();
     this.drawSelectionHighlights();
     this.drawSelectionBox();
     this.engine.commandManager.draw(this.ctx);
     this.drawSnapMarker();
+    this.drawUcsIcon();
     this.drawTouchOffsetCursor();
 
     ctx.restore();

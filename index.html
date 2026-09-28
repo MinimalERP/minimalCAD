@@ -11,6 +11,9 @@
       <div id="tab-bar"></div>
       <div id="canvas-wrapper">
         <canvas id="cad-canvas" tabindex="0"></canvas>
+        <!-- 3D workspace (view3d/, lazy-loaded): WebGL canvas + model browser. -->
+        <canvas id="gl-canvas" tabindex="0" hidden></canvas>
+        <div id="model-browser" hidden></div>
         <button id="home-btn" title="Home view (fit drawing)">⌂</button>
         <!-- Touch-only overlay (shown via CSS, see style.css) -- phones/tablets
              have no physical Escape key. Wired in main.ts. -->

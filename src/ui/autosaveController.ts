@@ -45,7 +45,7 @@ export function initAutosave(getActiveEngine: () => Engine, requestRedraw: () =>
 
     function documentIsEmpty(): boolean {
       const document = getActiveEngine().document;
-      return document.entities.length === 0 && document.constraints.length === 0;
+      return document.entities.length === 0 && document.constraints.length === 0 && document.part === undefined;
     }
 
     function runAutosave(): void {
