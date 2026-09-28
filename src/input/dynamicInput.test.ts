@@ -49,22 +49,24 @@ describe("evalNumber", () => {
 describe("parsePoint", () => {
   const origin = { x: 10, y: 20 };
 
-  it("parses a relative x,y offset from origin", () => {
-    expect(parsePoint("12,7", origin)).toEqual({ x: 22, y: 27 });
+  // Typed values are AutoCAD-style (Y up, CCW angles); the world is Y-down,
+  // so typed +Y comes out as a smaller world y.
+  it("parses a relative x,y offset from origin (typed +Y is up)", () => {
+    expect(parsePoint("12,7", origin)).toEqual({ x: 22, y: 13 });
   });
 
   it("'@' prefix is a no-op alias", () => {
-    expect(parsePoint("@12,7", origin)).toEqual({ x: 22, y: 27 });
+    expect(parsePoint("@12,7", origin)).toEqual({ x: 22, y: 13 });
   });
 
   it("with no origin, x,y is absolute", () => {
-    expect(parsePoint("12,7", null)).toEqual({ x: 12, y: 7 });
+    expect(parsePoint("12,7", null)).toEqual({ x: 12, y: -7 });
   });
 
-  it("distance<angle in degrees, plain math convention (no Y-flip)", () => {
+  it("distance<angle in degrees, counter-clockwise like AutoCAD", () => {
     const p = parsePoint("10<90", origin)!;
-    expect(p.x).toBeCloseTo(10, 9); // cos(90deg)=0 -> +0
-    expect(p.y).toBeCloseTo(30, 9); // sin(90deg)=1 -> +10
+    expect(p.x).toBeCloseTo(10, 9); // straight up on screen...
+    expect(p.y).toBeCloseTo(10, 9); // ...= world y decreasing (Y-down world)
   });
 
   it("'/' is accepted identically to '<'", () => {

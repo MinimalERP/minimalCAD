@@ -150,6 +150,10 @@ function surfaceKey(face: Face, tol: number): string | null {
     const o = sub(g.axisOrigin, scale(a, dot(g.axisOrigin, a)));
     return `c:${r(a.x * 1e3)},${r(a.y * 1e3)},${r(a.z * 1e3)},${r(o.x)},${r(o.y)},${r(o.z)},${r(g.radius)}`;
   }
+  if (g.kind === "cone") {
+    const a = normalize(g.axis);
+    return `k:${r(a.x * 1e3)},${r(a.y * 1e3)},${r(a.z * 1e3)},${r(g.apex.x)},${r(g.apex.y)},${r(g.apex.z)},${r(g.halfAngle * 1e6)}`;
+  }
   return null;
 }
 
@@ -205,6 +209,46 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
     }
     return { ...p, idx: out };
   });
+
+  // 1c. Belt and braces: any edge still without a reverse twin gets every
+  //     vertex lying on it inserted (full scan, slightly looser tolerance),
+  //     until the mesh closes up or nothing changes.
+  for (let pass = 0; pass < 3; pass++) {
+    const directed = new Set<string>();
+    for (const p of polys) for (let k = 0; k < p.idx.length; k++) directed.add(`${p.idx[k]}|${p.idx[(k + 1) % p.idx.length]}`);
+    let changed = false;
+    const loose2 = (tol * 1e3) ** 2;
+    polys = polys.map((p) => {
+      const out: number[] = [];
+      let touched = false;
+      for (let k = 0; k < p.idx.length; k++) {
+        const ia = p.idx[k]!;
+        const ib = p.idx[(k + 1) % p.idx.length]!;
+        out.push(ia);
+        if (directed.has(`${ib}|${ia}`)) continue;
+        const a = pts[ia]!;
+        const ab = sub(pts[ib]!, a);
+        const len2 = dot(ab, ab);
+        if (len2 === 0) continue;
+        const onEdge: [number, number][] = [];
+        pts.forEach((q, i) => {
+          if (i === ia || i === ib) return;
+          const ap = sub(q, a);
+          const t = dot(ap, ab) / len2;
+          if (t <= 1e-9 || t >= 1 - 1e-9) return;
+          const d = sub(ap, scale(ab, t));
+          if (dot(d, d) <= loose2) onEdge.push([t, i]);
+        });
+        if (onEdge.length === 0) continue;
+        onEdge.sort((x, y) => x[0] - y[0]);
+        for (const [, i] of onEdge) out.push(i);
+        touched = true;
+      }
+      if (touched) changed = true;
+      return touched ? { ...p, idx: out } : p;
+    });
+    if (!changed) break;
+  }
 
   // 2. Unify faces on the same surface; compact to the faces actually used.
   const canonical = new Map<number, number>();
@@ -296,13 +340,13 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
     id,
     feature,
     mesh: {
-      positions: new Float32Array(positions),
-      normals: new Float32Array(normals),
+      positions: new Float64Array(positions),
+      normals: new Float64Array(normals),
       indices: new Uint32Array(indices),
       faceIds: new Uint32Array(faceIds),
     },
     faces: outFaces,
-    edges,
+    edges: mergeCircleArcs(edges, tol),
   };
 }
 
@@ -346,15 +390,70 @@ function chainSegments(segs: readonly [number, number][]): number[][] {
   return chains;
 }
 
+/** Exact radius of a circle on a cylinder/cone at `center` (on its axis). */
+function exactRimRadius(face: Face, center: Vec3): number | null {
+  if (face.geom.kind === "cylinder") return face.geom.radius;
+  if (face.geom.kind === "cone") {
+    const t = dot(sub(center, face.geom.apex), normalize(face.geom.axis));
+    return Math.abs(t) * Math.tan(face.geom.halfAngle);
+  }
+  return null;
+}
+
+/** Joins arc pieces of one circle (same centre, axis and radius) that
+ *  together make a full turn into a single exact circle edge. */
+function mergeCircleArcs(edges: Edge[], tol: number): Edge[] {
+  const r = (v: number): number => Math.round(v / (tol * 1e3));
+  const groups = new Map<string, Edge[]>();
+  const rest: Edge[] = [];
+  for (const e of edges) {
+    if (e.geom.kind !== "arc") {
+      rest.push(e);
+      continue;
+    }
+    const g = e.geom;
+    let n = normalize(g.normal);
+    if (n.x < -1e-9 || (Math.abs(n.x) <= 1e-9 && (n.y < -1e-9 || (Math.abs(n.y) <= 1e-9 && n.z < 0)))) n = scale(n, -1);
+    const key = [g.center.x, g.center.y, g.center.z, n.x * 1e3, n.y * 1e3, n.z * 1e3, g.radius].map(r).join(",");
+    const list = groups.get(key);
+    if (list === undefined) groups.set(key, [e]);
+    else list.push(e);
+  }
+  for (const list of groups.values()) {
+    const total = list.reduce((s, e) => s + (e.geom.kind === "arc" ? Math.abs(e.geom.sweep) : 0), 0);
+    if (list.length > 1 && total >= 2 * Math.PI - 1e-3) {
+      const first = list[0]!;
+      if (first.geom.kind === "arc") rest.push({ ref: first.ref, geom: { ...first.geom, sweep: 2 * Math.PI } });
+    } else rest.push(...list);
+  }
+  return rest;
+}
+
+/** Axis line of a cylinder or cone face, or null. */
+function revolutionAxis(face: Face): { point: Vec3; dir: Vec3 } | null {
+  if (face.geom.kind === "cylinder") return { point: face.geom.axisOrigin, dir: normalize(face.geom.axis) };
+  if (face.geom.kind === "cone") return { point: face.geom.apex, dir: normalize(face.geom.axis) };
+  return null;
+}
+
 function classifyChain(pts: Vec3[], fa: Face, fb: Face | undefined, tol: number, ref: () => TopoRef): Edge[] {
   const closed = pts.length > 2 && length(sub(pts[0]!, pts[pts.length - 1]!)) <= tol * 4;
-  const cyl = fa.geom.kind === "cylinder" ? fa.geom : fb?.geom.kind === "cylinder" ? fb.geom : null;
-  const other = cyl === fa.geom ? fb : fa;
+  const axisA = revolutionAxis(fa);
+  const axisB = fb === undefined ? null : revolutionAxis(fb);
+  const rev = axisA ?? axisB;
+  const other = axisA !== null ? fb : fa;
+  const otherAxis = axisA !== null ? axisB : axisA;
+  const coaxial = (p: { point: Vec3; dir: Vec3 }, q: { point: Vec3; dir: Vec3 }): boolean =>
+    Math.abs(Math.abs(dot(p.dir, q.dir)) - 1) < 1e-6 && length(cross(sub(q.point, p.point), p.dir)) < tol * 1e3;
 
-  // plane | cylinder with the plane square to the axis: a true circle arc.
-  if (cyl !== null && other?.geom.kind === "plane" && Math.abs(Math.abs(dot(normalize(other.geom.normal), normalize(cyl.axis))) - 1) < 1e-6) {
-    const a = normalize(cyl.axis);
-    const center = add(cyl.axisOrigin, scale(a, dot(sub(pts[0]!, cyl.axisOrigin), a)));
+  // A revolution surface (cylinder/cone) meeting a plane square to its axis,
+  // or another coaxial revolution surface: a true circle arc.
+  const squarePlane =
+    rev !== null && other?.geom.kind === "plane" && Math.abs(Math.abs(dot(normalize(other.geom.normal), rev.dir)) - 1) < 1e-6;
+  if (rev !== null && (squarePlane || (otherAxis !== null && coaxial(rev, otherAxis)))) {
+    const a = rev.dir;
+    const center = add(rev.point, scale(a, dot(sub(pts[0]!, rev.point), a)));
+    const radius = length(sub(pts[0]!, center));
     const e1 = normalize(sub(pts[0]!, center));
     const e2 = cross(a, e1);
     let sweep = 0;
@@ -369,7 +468,8 @@ function classifyChain(pts: Vec3[], fa: Face, fb: Face | undefined, tol: number,
       prevAngle = angle;
     }
     if (closed) sweep = Math.sign(sweep || 1) * 2 * Math.PI;
-    return [{ ref: ref(), geom: { kind: "arc", center, normal: a, radius: cyl.radius, start: add(center, scale(e1, cyl.radius)), sweep } }];
+    const exactR = exactRimRadius(fa, center) ?? (fb === undefined ? null : exactRimRadius(fb, center)) ?? radius;
+    return [{ ref: ref(), geom: { kind: "arc", center, normal: a, radius: exactR, start: add(center, scale(e1, exactR)), sweep } }];
   }
 
   // Straight runs (plane | plane, or any chain that happens to be straight).

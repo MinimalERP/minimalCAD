@@ -102,7 +102,7 @@ export class MirrorCommand extends PickTransformCommand {
       const dx = this.currentMousePos.x - this.mirrorP1.x;
       const dy = this.currentMousePos.y - this.mirrorP1.y;
       const distance = Math.hypot(dx, dy);
-      const angleDeg = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
+      const angleDeg = ((Math.atan2(-dy, dx) * 180) / Math.PI + 360) % 360; // CCW, Y up
       this.commandBar.setLiveValue(distance.toFixed(2));
       this.commandBar.setLiveAngle(angleDeg.toFixed(1));
     }

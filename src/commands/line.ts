@@ -131,7 +131,8 @@ export class LineCommand extends BaseCommand {
     if (sepIdx !== -1 && this.startPoint !== null && this.currentMousePos !== null) {
       const angleMag = evalNumber(t.slice(sepIdx + 1));
       if (angleMag !== null) {
-        const side = this.currentMousePos.y < this.startPoint.y ? -1 : 1;
+        // Above the start (smaller world y, since world is Y-down) = positive angle.
+        const side = this.currentMousePos.y < this.startPoint.y ? 1 : -1;
         return parsePoint(`${t.slice(0, sepIdx)}<${angleMag * side}`, this.startPoint, this.currentAngle());
       }
     }

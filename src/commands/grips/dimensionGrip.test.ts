@@ -69,7 +69,7 @@ describe("gripAt + DimensionGripCommand", () => {
     const cmd = new DimensionGripCommand(engine);
     cmd.start();
     cmd.begin(dim, "point");
-    cmd.textInput("5,5");
+    cmd.textInput("5,-5"); // typed Y up: -5 typed is +5 in the Y-down world
 
     expect(dim.data.point).toEqual({ x: 5, y: 5 });
   });

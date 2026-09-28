@@ -27,6 +27,8 @@ export interface TopoRef {
 export type FaceGeom =
   | { kind: "plane"; origin: Vec3; normal: Vec3 }
   | { kind: "cylinder"; axisOrigin: Vec3; axis: Vec3; radius: number }
+  /** Right circular cone: radius grows by tan(halfAngle) per unit along `axis` from `apex`. */
+  | { kind: "cone"; apex: Vec3; axis: Vec3; halfAngle: number }
   | { kind: "freeform" };
 
 export interface Face {
@@ -47,8 +49,10 @@ export interface Edge {
 }
 
 export interface Mesh {
-  positions: Float32Array; // xyz per vertex
-  normals: Float32Array; // xyz per vertex
+  /** Double precision: this is kernel geometry (booleans, drawings); the
+   *  renderer converts to float32 itself. */
+  positions: Float64Array; // xyz per vertex
+  normals: Float64Array; // xyz per vertex
   indices: Uint32Array; // 3 per triangle
   faceIds: Uint32Array; // 1 per triangle
 }

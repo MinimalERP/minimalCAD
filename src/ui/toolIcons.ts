@@ -441,6 +441,26 @@ function drawExtrude(ctx: CanvasRenderingContext2D): void {
   arrowhead(ctx, 8, 1, -90);
 }
 
+function drawHole(ctx: CanvasRenderingContext2D): void {
+  // block with a drilled hole seen at an angle, and the drill axis
+  ctx.beginPath();
+  ctx.moveTo(1, 9);
+  ctx.lineTo(7, 5);
+  ctx.lineTo(19, 5);
+  ctx.lineTo(13, 9);
+  ctx.closePath();
+  ctx.stroke();
+  line(ctx, 1, 9, 1, 17);
+  line(ctx, 13, 9, 13, 17);
+  line(ctx, 1, 17, 13, 17);
+  line(ctx, 19, 5, 19, 13);
+  line(ctx, 13, 17, 19, 13);
+  ctx.beginPath();
+  ctx.ellipse(10, 7, 3.2, 1.4, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  dashed(ctx, () => line(ctx, 10, 1, 10, 15));
+}
+
 function drawWorkPlane(ctx: CanvasRenderingContext2D): void {
   // tilted plane over a dashed base plane
   dashed(ctx, () => planeOutline(ctx));
@@ -479,6 +499,7 @@ const DRAWERS: Record<string, Drawer> = {
   finishsketch: drawFinishSketch,
   extrude: drawExtrude,
   workplane: drawWorkPlane,
+  hole: drawHole,
   viewfront: viewCube("front"),
   viewtop: viewCube("top"),
   viewright: viewCube("right"),

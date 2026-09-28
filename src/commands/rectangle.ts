@@ -136,7 +136,9 @@ export class RectangleCommand extends BaseCommand {
       const [width, height] = dims;
       const mouse = this.currentMousePos ?? this.firstCorner!;
       const xDir = mouse.x >= this.firstCorner!.x ? 1 : -1;
-      const yDir = mouse.y >= this.firstCorner!.y ? 1 : -1;
+      // World is Y-down: a mouse below the corner means "down"; otherwise
+      // (including no mouse movement at all) go up, like AutoCAD's +Y.
+      const yDir = mouse.y > this.firstCorner!.y ? 1 : -1;
       const halfW = this.mode === "center" ? width / 2 : width;
       const halfH = this.mode === "center" ? height / 2 : height;
       this.commitSecondPoint({

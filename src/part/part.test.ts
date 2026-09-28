@@ -10,7 +10,7 @@ import { faceFrame, localTo3d, planeFrame, toLocal, workPlaneFrame } from "./pla
 import { evalExpression, resolveParameters } from "./params";
 import { rebuild } from "./rebuild";
 import { emptyPart, nextId, parsePart } from "./types";
-import type { PartData } from "./types";
+import type { ExtrudeFeature, PartData } from "./types";
 import type { Body } from "./kernel/types";
 
 const rectLines = (w: number, h: number): Entity[] => [
@@ -203,7 +203,7 @@ describe("params + rebuild", () => {
   it("profile seed points pick one region", () => {
     const part = platePart("5");
     part.sketches[0]!.entities.push(new Circle({ x: 300, y: 0 }, 10).serialize());
-    part.features[0]!.profiles = [{ x: 300, y: 0 }];
+    (part.features[0] as ExtrudeFeature).profiles = [{ x: 300, y: 0 }];
     const body = rebuild(part).bodies[0]!;
     expect(meshVolume(body.mesh.positions, body.mesh.indices)).toBeCloseTo(Math.PI * 100 * 5, -1);
   });
@@ -410,7 +410,7 @@ describe("join / cut features in rebuild", () => {
     expect(meshVolume(result.bodies[0]!.mesh.positions, result.bodies[0]!.mesh.indices)).toBeCloseTo((5000 - hole) * 20, 2);
 
     const legacy = parsePart({ features: [{ id: "E", type: "extrude", sketch: "Drawing", distance: 5 }] });
-    expect(legacy?.features[0]!.operation).toBe("new");
+    expect((legacy?.features[0] as ExtrudeFeature).operation).toBe("new");
     expect(legacy?.features[0]!.extent).toBeUndefined();
   });
 });

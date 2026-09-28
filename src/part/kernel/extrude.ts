@@ -186,8 +186,8 @@ export function extrudeRegions(featureId: string, regions: readonly Region[], fr
     id: featureId,
     feature: featureId,
     mesh: {
-      positions: new Float32Array(mb.positions),
-      normals: new Float32Array(mb.normals),
+      positions: new Float64Array(mb.positions),
+      normals: new Float64Array(mb.normals),
       indices: new Uint32Array(mb.indices),
       faceIds: new Uint32Array(mb.faceIds),
     },

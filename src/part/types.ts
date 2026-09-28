@@ -85,7 +85,58 @@ export interface ExtrudeFeature {
   suppressed?: boolean;
 }
 
-export type FeatureData = ExtrudeFeature;
+export type HoleStyle = "plain" | "counterbore" | "countersink";
+
+/** What a hole centre is dimensioned from (all in face plane coordinates):
+ *  - "edge": a straight edge of the face (stored as a segment);
+ *  - "hole": an EARLIER centre of the same feature (by index) -- a chain,
+ *    so moving that hole moves this one;
+ *  - "point": a fixed point, e.g. the centre of a circle already on the face.
+ *  From a point, the distance runs along the face's horizontal ("u") or
+ *  vertical ("v") direction. */
+export type HoleRef =
+  | { kind: "edge"; seg: [Point, Point] }
+  | { kind: "hole"; index: number; axis: "u" | "v" }
+  | { kind: "point"; p: Point; axis: "u" | "v" };
+
+/** "`d` mm from `ref`", on side `side` (+1/-1 along the ref's normal). */
+export interface HoleDim {
+  ref: HoleRef;
+  d: string;
+  side: 1 | -1;
+}
+
+/** A hole centre in face coordinates. With `dims` (up to 2) it is
+ *  parametric: x/y are then just the last solved position. */
+export interface HoleCenter extends Point {
+  dims?: HoleDim[];
+}
+
+/** A drilled hole (or several), Inventor-style: placed on a flat face. */
+export interface HoleFeature {
+  id: string;
+  type: "hole";
+  /** The flat face it's drilled into. */
+  face: TopoRef;
+  /** Hole centres in the face's own plane coordinates (u right, v up). */
+  centers: HoleCenter[];
+  /** Expressions (mm). */
+  diameter: string;
+  depth: string;
+  /** Absent = blind hole of `depth` with a 118 degree drill point. */
+  extent?: "through";
+  style: HoleStyle;
+  cbDiameter?: string;
+  cbDepth?: string;
+  csDiameter?: string;
+  /** Included countersink angle, degrees (default 90). */
+  csAngle?: string;
+  suppressed?: boolean;
+}
+
+export type FeatureData = ExtrudeFeature | HoleFeature;
+
+export const isExtrude = (f: FeatureData): f is ExtrudeFeature => f.type === "extrude";
 
 export interface Parameter {
   name: string;
@@ -134,8 +185,70 @@ function parseSeed(raw: unknown): ProfileSeed | null {
   return typeof raw.area === "number" ? { x: raw.x, y: raw.y, area: raw.area } : { x: raw.x, y: raw.y };
 }
 
+function parseSegment(raw: unknown): [Point, Point] | null {
+  if (!Array.isArray(raw) || raw.length !== 2) return null;
+  const a = parseSeed(raw[0]);
+  const b = parseSeed(raw[1]);
+  return a === null || b === null ? null : [{ x: a.x, y: a.y }, { x: b.x, y: b.y }];
+}
+
+function parseHoleRef(raw: unknown): HoleRef | null {
+  if (!isObject(raw)) return null;
+  const axis = raw.axis === "v" ? "v" : "u";
+  if (raw.kind === "edge") {
+    const seg = parseSegment(raw.seg);
+    return seg === null ? null : { kind: "edge", seg };
+  }
+  if (raw.kind === "hole" && typeof raw.index === "number") return { kind: "hole", index: raw.index, axis };
+  if (raw.kind === "point") {
+    const p = parseSeed(raw.p);
+    return p === null ? null : { kind: "point", p: { x: p.x, y: p.y }, axis };
+  }
+  return null;
+}
+
+function parseHoleCenter(raw: unknown): HoleCenter | null {
+  const p = parseSeed(raw);
+  if (p === null || !isObject(raw)) return null;
+  const c: HoleCenter = { x: p.x, y: p.y };
+  if (Array.isArray(raw.dims)) {
+    const dims: HoleDim[] = [];
+    for (const d of raw.dims.slice(0, 2)) {
+      if (!isObject(d)) continue;
+      const ref = parseHoleRef(d.ref);
+      if (ref === null) continue;
+      dims.push({ ref, d: typeof d.d === "number" ? String(d.d) : String(d.d ?? "0"), side: d.side === -1 ? -1 : 1 });
+    }
+    if (dims.length > 0) c.dims = dims;
+  }
+  return c;
+}
+
 function parseFeature(raw: unknown): FeatureData | null {
   if (!isObject(raw) || typeof raw.id !== "string") return null;
+  if (raw.type === "hole" && isObject(raw.face)) {
+    const f = raw.face;
+    if (typeof f.feature !== "string" || typeof f.index !== "string" || typeof f.role !== "string") return null;
+    const str = (v: unknown, dflt: string): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : dflt);
+    const opt = (v: unknown): string | undefined => (v === undefined ? undefined : str(v, ""));
+    const style: HoleStyle = raw.style === "counterbore" || raw.style === "countersink" ? raw.style : "plain";
+    const hole: HoleFeature = {
+      id: raw.id,
+      type: "hole",
+      face: { feature: f.feature, role: f.role as TopoRef["role"], index: f.index },
+      centers: Array.isArray(raw.centers) ? raw.centers.map(parseHoleCenter).filter((p): p is HoleCenter => p !== null) : [],
+      diameter: str(raw.diameter, "10"),
+      depth: str(raw.depth, "10"),
+      style,
+      suppressed: raw.suppressed === true,
+    };
+    if (raw.extent === "through") hole.extent = "through";
+    for (const key of ["cbDiameter", "cbDepth", "csDiameter", "csAngle"] as const) {
+      const v = opt(raw[key]);
+      if (v !== undefined) hole[key] = v;
+    }
+    return hole;
+  }
   if (raw.type === "extrude" && typeof raw.sketch === "string") {
     const profiles = Array.isArray(raw.profiles)
       ? raw.profiles.map(parseSeed).filter((p): p is ProfileSeed => p !== null)

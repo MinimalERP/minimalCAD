@@ -17,7 +17,8 @@ import { faceFrame, offsetFrame, planeFrame, toLocal, workPlaneFrame } from "./p
 import type { Frame } from "./plane";
 import { findProfiles, regionContains } from "./profile";
 import type { ProfileResult, Region } from "./profile";
-import type { ExtrudeFeature, PartData, PlaneRef, SketchData } from "./types";
+import type { ExtrudeFeature, HoleFeature, PartData, PlaneRef, SketchData } from "./types";
+import { holeTools } from "./hole";
 import { DRAWING_SKETCH, FACE_PLANE, isBasePlane } from "./types";
 
 export interface FeatureStatus {
@@ -146,15 +147,22 @@ export function drawingSketch(entities: Record<string, unknown>[]): SketchData {
 /** Long enough to pass through every body from anywhere on `frame`'s plane. */
 export function throughLength(bodies: readonly Body[], frame: Frame): number {
   if (bodies.length === 0) return 0;
-  let span = 0;
+  // Farthest any solid reaches from the plane, measured along its normal
+  // (either side) -- just past the far side of the model, so a through cut
+  // clears everything without a tool that hangs far out into space.
+  let reach = 0;
   for (const b of bodies) {
     const { min, max } = bodyBounds(b);
-    const corners = [min, max].flatMap((x) => [min, max].flatMap((y) => [min, max].map((z) => ({ x: x.x, y: y.y, z: z.z }))));
-    for (const c of corners) {
-      span = Math.max(span, Math.abs(c.x - frame.origin.x) + Math.abs(c.y - frame.origin.y) + Math.abs(c.z - frame.origin.z));
+    for (const x of [min.x, max.x]) {
+      for (const y of [min.y, max.y]) {
+        for (const z of [min.z, max.z]) {
+          const d = (x - frame.origin.x) * frame.n.x + (y - frame.origin.y) * frame.n.y + (z - frame.origin.z) * frame.n.z;
+          reach = Math.max(reach, Math.abs(d));
+        }
+      }
     }
   }
-  return span * 2 + 1;
+  return reach + Math.max(1, reach * 0.02);
 }
 
 /**
@@ -205,6 +213,20 @@ export function applyOperation(bodies: Body[], tool: Body, operation: ExtrudeFea
   return removed ? { ok: true } : { ok: false, error: "Cut removed nothing - the shape doesn't reach the solid" };
 }
 
+/** Drills a Hole feature into the bodies (in place). */
+function applyHole(feature: HoleFeature, bodies: Body[], params: ReadonlyMap<string, number>): FeatureStatus {
+  const frame = faceFrameOf(bodies, feature.face);
+  if (frame === null) return { ok: false, error: "The face this hole is on no longer exists" };
+  if (feature.centers.length === 0) return { ok: false, error: "No hole centres" };
+  const tools = holeTools(feature, frame, params, throughLength(bodies, frame));
+  if (typeof tools === "string") return { ok: false, error: tools };
+  let removedAny = false;
+  for (const tool of tools) {
+    if (applyOperation(bodies, tool, "cut").ok) removedAny = true;
+  }
+  return removedAny ? { ok: true } : { ok: false, error: "Hole misses the solid" };
+}
+
 export function rebuild(part: PartData, drawingEntities: Record<string, unknown>[] = []): RebuildResult {
   const params = resolveParameters(part.parameters);
   const planes = resolveWorkPlanes(part, params);
@@ -229,6 +251,10 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
   for (const feature of part.features) {
     if (feature.suppressed === true) {
       status.set(feature.id, { ok: true });
+      continue;
+    }
+    if (feature.type === "hole") {
+      status.set(feature.id, applyHole(feature, bodies, params));
       continue;
     }
     const geo = resolveSketch(feature.sketch);

@@ -106,7 +106,8 @@ export class EllipseCommand extends BaseCommand {
       const resolved = snapType === null ? this.engine.applyOrtho(this.center!, point) : point;
       this.currentMousePos = resolved;
       const distance = Math.hypot(resolved.x - this.center!.x, resolved.y - this.center!.y);
-      const angleDeg = (this.currentAngle() * 180) / Math.PI;
+      // AutoCAD bearing: counter-clockwise with Y up (the world is Y-down).
+      const angleDeg = ((-this.currentAngle() * 180) / Math.PI + 360) % 360;
       this.commandBar.setLiveValue(distance.toFixed(2));
       this.commandBar.setLiveAngle(angleDeg.toFixed(1));
     } else {

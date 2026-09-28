@@ -896,3 +896,260 @@ body {
 #model-browser .mb-row.indent {
   padding-left: 24px;
 }
+
+/* --- 3D feature dialogs (view3d/featureDialog.ts): Inventor-style, non-modal --- */
+
+.feature-dialog {
+  position: absolute;
+  top: 10px;
+  right: 128px; /* beside the ViewCube */
+  width: 320px;
+  max-height: calc(100% - 20px);
+  display: flex;
+  flex-direction: column;
+  background: #2b2b2c;
+  border: 1px solid #454545;
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  color: #dcdcdc;
+  font-size: 12px;
+  z-index: 20;
+  user-select: none;
+}
+#gl-canvas[hidden] ~ .feature-dialog {
+  display: none;
+}
+.feature-dialog .fd-title {
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 13px;
+  color: #ffffff;
+  background: #333337;
+  border-bottom: 1px solid #454545;
+  border-radius: 6px 6px 0 0;
+}
+.feature-dialog .fd-body {
+  padding: 8px 12px 4px;
+  overflow-y: auto; /* OK / Cancel always stay visible */
+  min-height: 0;
+}
+.feature-dialog .fd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0;
+}
+.feature-dialog .fd-row[hidden] {
+  display: none;
+}
+.feature-dialog .fd-label {
+  flex: 0 0 76px;
+  color: #b8b8b8;
+}
+.feature-dialog .fd-slot {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.feature-dialog .fd-input {
+  width: 90px;
+  padding: 4px 6px;
+  background: #1e1e1e;
+  color: #ffffff;
+  border: 1px solid #555555;
+  border-radius: 3px;
+  font: inherit;
+}
+.feature-dialog .fd-input.fd-wide {
+  width: 110px;
+}
+.feature-dialog .fd-input:focus {
+  outline: none;
+  border-color: #0e639c;
+}
+.feature-dialog .fd-unit {
+  color: #8a8a8a;
+}
+.feature-dialog .fd-selection {
+  padding: 3px 8px;
+  border-radius: 3px;
+  background: rgba(232, 176, 74, 0.15);
+  color: #e8b04a;
+}
+.feature-dialog .fd-selection.done {
+  background: rgba(76, 175, 80, 0.15);
+  color: #7fd07f;
+}
+.feature-dialog .fd-choice {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 4px;
+}
+.feature-dialog .fd-choice-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 2px;
+  background: #1e1e1e;
+  color: #cfcfcf;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.feature-dialog .fd-choice-btn:hover {
+  border-color: #6a6a6a;
+}
+.feature-dialog .fd-choice-btn.active {
+  background: #094771;
+  border-color: #0e639c;
+  color: #ffffff;
+}
+.feature-dialog .fd-small-btn {
+  padding: 3px 8px;
+  background: #3a3a3d;
+  color: #dcdcdc;
+  border: 1px solid #555555;
+  border-radius: 3px;
+  font: inherit;
+  cursor: pointer;
+}
+.feature-dialog .fd-small-btn:hover {
+  background: #45454a;
+}
+.feature-dialog .fd-hint {
+  margin: 8px 0 2px;
+  color: #8a8a8a;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.feature-dialog .fd-message {
+  min-height: 16px;
+  padding: 0 12px;
+  color: #f48771;
+  font-size: 11px;
+}
+.feature-dialog .fd-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px 10px;
+}
+.feature-dialog .fd-buttons button {
+  min-width: 72px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+.feature-dialog .fd-ok {
+  background: #0e639c;
+  color: #ffffff;
+  border: 1px solid #1177bb;
+}
+.feature-dialog .fd-ok:disabled {
+  background: #2f3b45;
+  color: #7c8a96;
+  border-color: #3a4652;
+  cursor: default;
+}
+.feature-dialog .fd-cancel {
+  background: #3a3a3d;
+  color: #dcdcdc;
+  border: 1px solid #555555;
+}
+.feature-dialog .fd-holes {
+  margin: 4px 0 6px;
+  padding: 4px 6px;
+  background: #242425;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  max-height: 190px;
+  overflow-y: auto;
+}
+.feature-dialog .fd-hole-head {
+  padding: 3px 4px;
+  color: #cfcfcf;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.feature-dialog .fd-hole-head.active {
+  background: #094771;
+  color: #ffffff;
+}
+.feature-dialog .fd-hole-dim {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0 2px 14px;
+}
+.feature-dialog .fd-hole-ref {
+  flex: 0 0 72px;
+  color: #e8d27a;
+}
+.feature-dialog .fd-hole-dim .fd-input {
+  width: 64px;
+}
+.feature-dialog .fd-icon-btn {
+  padding: 1px 6px;
+}
+
+/* On-model dimensions (view3d/modelView.ts setDimensions) */
+.dim-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+#gl-canvas[hidden] ~ .dim-layer {
+  display: none;
+}
+.dim-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 1px 5px;
+  background: rgba(30, 30, 30, 0.88);
+  border: 1px solid #ffd400;
+  border-radius: 3px;
+  color: #ffd400;
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: auto;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dim-label.selected {
+  border-color: #4fc3ff;
+  color: #4fc3ff;
+}
+.dim-label .dim-input {
+  width: 58px;
+  background: #1e1e1e;
+  color: #ffffff;
+  border: none;
+  outline: none;
+  font: inherit;
+}
+.feature-dialog .fd-toggle {
+  display: block;
+  width: 100%;
+  margin: 6px 0;
+  padding: 6px;
+  background: #1e1e1e;
+  color: #dcdcdc;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+.feature-dialog .fd-toggle.active {
+  background: #094771;
+  border-color: #0e639c;
+  color: #ffffff;
+}

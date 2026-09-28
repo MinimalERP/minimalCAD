@@ -185,7 +185,13 @@ export function evalNumber(text: string | null | undefined): number | null {
  *   "12,7"     -> relative offset (dx, dy) from `origin` (or absolute if origin is null)
  *   "@12,7"    -> same as above, '@' accepted for familiarity
  *   "50"       -> distance only, applied along `currentAngle` (radians) from `origin`
- *   "50<30"    -> distance<angle, angle in degrees (plain atan2/math convention, no Y-flip)
+ *   "50<30"    -> distance<angle, angle in degrees, counter-clockwise from +X
+ *
+ * Typed values use AutoCAD's convention -- +Y is UP the screen, angles are
+ * counter-clockwise -- while the drawing's world space is Y-down (the
+ * desktop-compatible storage, see core/document.ts). So typed Y and typed
+ * angles are flipped here, in this one place; `currentAngle` is already a
+ * world angle and needs no flip.
  *   "50/30"    -> same as "50<30"; '/' is a no-Shift alternative key to '<'
  */
 export function parsePoint(text: string, origin: Point | null, currentAngle = 0.0): Point | null {
@@ -206,7 +212,7 @@ export function parsePoint(text: string, origin: Point | null, currentAngle = 0.
     if (dist === null || angleDeg === null) return null;
     const angle = (angleDeg * Math.PI) / 180;
     dx = dist * Math.cos(angle);
-    dy = dist * Math.sin(angle);
+    dy = -dist * Math.sin(angle); // CCW, Y up
   } else if (t.includes(",")) {
     const commaIdx = t.indexOf(",");
     const dxStr = t.slice(0, commaIdx);
@@ -215,7 +221,7 @@ export function parsePoint(text: string, origin: Point | null, currentAngle = 0.
     const parsedDy = evalNumber(dyStr);
     if (parsedDx === null || parsedDy === null) return null;
     dx = parsedDx;
-    dy = parsedDy;
+    dy = -parsedDy; // Y up
   } else {
     const dist = evalNumber(t);
     if (dist === null) return null;

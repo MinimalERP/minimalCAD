@@ -17,7 +17,10 @@ import { triangulate } from "../part/kernel/triangulate";
 import { ViewCube } from "./viewCube";
 import type { Body, Edge, TopoRef } from "../part/kernel/types";
 import type { Frame } from "../part/plane";
-import { localTo3d, planeFrame } from "../part/plane";
+import { faceFrame, localTo3d, planeFrame } from "../part/plane";
+import { edgesOnFace } from "../part/faceTopology";
+import type { FaceSnap } from "../part/faceTopology";
+import { dot, sub } from "../part/vec3";
 import type { Region } from "../part/profile";
 import type { Point } from "../core/types";
 
@@ -57,11 +60,24 @@ export interface PlaneDisplay {
   frame: Frame;
 }
 
-type Hit =
+export type Hit =
   | { kind: "plane"; key: string }
   /** A flat face of a solid (sketch-on-face). */
   | { kind: "face"; ref: TopoRef; body: Body; faceId: number }
-  | { kind: "region"; region: PickableRegion };
+  | { kind: "region"; region: PickableRegion }
+  /** A point on the active face (plane-local coords), possibly osnapped. */
+  | { kind: "facePoint"; point: Point; snap: string | null }
+  /** A point ON a flat face of a solid (whichever face is under the cursor),
+   *  in that face's coords, osnapped to the face's own edges/centres. */
+  | { kind: "surfacePoint"; ref: TopoRef; body: Body; faceId: number; frame: Frame; point: Point; raw: Point; snap: string | null };
+
+/** An osnap candidate on the active face, in its plane-local coords. */
+export interface SnapCandidate {
+  point: Point;
+  kind: string;
+}
+
+const SNAP_PX = 12;
 
 function v3(p: { x: number; y: number; z: number }): THREE.Vector3 {
   return new THREE.Vector3(p.x, p.y, p.z);
@@ -106,8 +122,9 @@ function segmentsGeometry(polylines: THREE.Vector3[][]): THREE.BufferGeometry {
 
 function bodyGeometry(body: Body): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(body.mesh.positions, 3));
-  geo.setAttribute("normal", new THREE.BufferAttribute(body.mesh.normals, 3));
+  // GPU wants float32; the kernel keeps float64.
+  geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(body.mesh.positions), 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(body.mesh.normals), 3));
   geo.setIndex(new THREE.BufferAttribute(body.mesh.indices, 1));
   geo.computeBoundingSphere();
   return geo;
@@ -162,7 +179,19 @@ export class ModelView {
   private bodyMeshes: THREE.Mesh[] = [];
   private faceHighlight = new THREE.Group();
 
-  private pickMode: "none" | "plane" | "region" = "none";
+  private pickMode: "none" | "plane" | "region" | "facePoint" | "surfacePoint" = "none";
+  private faceFrame: Frame | null = null;
+  private snapCandidates: SnapCandidate[] = [];
+  private markerGroup = new THREE.Group();
+  /** On-model dimensions (e.g. hole positions): lines here, values as HTML labels. */
+  private dimGroup = new THREE.Group();
+  private dimLayer: HTMLDivElement;
+  private dimFrame: Frame | null = null;
+  private dimLabels: { id: string; at: Point; el: HTMLDivElement }[] = [];
+  /** The value box currently open on a dimension (survives re-draws). */
+  private dimEdit: { id: string; input: HTMLInputElement; finish: (ok: boolean) => void } | null = null;
+  /** A dimension's value was clicked (to edit it / select it). */
+  onDimClick: ((id: string) => void) | null = null;
   private hovered: Hit | null = null;
   private selectedRegions = new Set<PickableRegion>();
   private planeSize = 60;
@@ -219,6 +248,9 @@ export class ModelView {
     this.viewLabel = document.createElement("div");
     this.viewLabel.className = "v3d-overlay view-label";
     parent.appendChild(this.viewLabel);
+    this.dimLayer = document.createElement("div");
+    this.dimLayer.className = "v3d-overlay dim-layer";
+    parent.appendChild(this.dimLayer);
     this.viewCube = new ViewCube(parent);
     this.viewCube.onPick = (dir) => {
       this.frame(dir);
@@ -227,6 +259,8 @@ export class ModelView {
     this.viewCube.onHome = () => this.setView("iso");
 
     this.scene.add(
+      this.markerGroup,
+      this.dimGroup,
       this.faceHighlight,
       this.gridGroup,
       this.ucsIcon,
@@ -414,6 +448,7 @@ export class ModelView {
 
   setBodies(bodies: readonly Body[]): void {
     disposeChildren(this.contentGroup);
+    this.snapCache.clear();
     this.bodyMeshes = [];
     for (const body of bodies) {
       const mesh = new THREE.Mesh(
@@ -455,9 +490,10 @@ export class ModelView {
   }
 
   /** Tool preview: blue for new/join, red for a cut. */
-  setPreview(body: Body | null, cut = false): void {
+  setPreview(bodyOrBodies: Body | readonly Body[] | null, cut = false): void {
     disposeChildren(this.previewGroup);
-    if (body !== null) {
+    const list = bodyOrBodies === null ? [] : Array.isArray(bodyOrBodies) ? bodyOrBodies : [bodyOrBodies as Body];
+    for (const body of list) {
       this.previewGroup.add(
         new THREE.Mesh(
           bodyGeometry(body),
@@ -481,7 +517,191 @@ export class ModelView {
 
   // --- picking ---
 
+  /** Face-point picking (Hole centres): clicks on `frame`'s face, snapping
+   *  to `candidates` within SNAP_PX on screen (AutoCAD-style osnap). */
+  setFacePointMode(frame: Frame, candidates: readonly SnapCandidate[]): void {
+    this.setPickMode("none");
+    this.pickMode = "facePoint";
+    this.faceFrame = frame;
+    this.snapCandidates = candidates.slice();
+  }
+
+  /** World units per screen pixel (ortho camera). */
+  pixelSize(): number {
+    return 1 / this.camera.zoom;
+  }
+
+  /** Highlighted segments on a face (picked / hovered edges), in yellow. */
+  /**
+   * On-model dimensions on a face: `segs` are the extension/dimension lines
+   * and arrowheads (face coords), each with a clickable value label.
+   * Pass an empty list (or null frame) to clear.
+   */
+  setDimensions(
+    frame: Frame | null,
+    dims: readonly { id: string; segs: [Point, Point][]; labelAt: Point; text: string; selected: boolean }[],
+  ): void {
+    disposeChildren(this.dimGroup);
+    this.dimLayer.innerHTML = "";
+    this.dimLabels = [];
+    this.dimFrame = frame;
+    if (frame === null) {
+      this.requestRender();
+      return;
+    }
+    const hadFocus = this.dimEdit !== null && document.activeElement === this.dimEdit.input;
+    for (const d of dims) {
+      const lines = new THREE.LineSegments(
+        segmentsGeometry(d.segs.map(([a, b]) => [v3(localTo3d(frame, a)), v3(localTo3d(frame, b))])),
+        new THREE.LineBasicMaterial({ color: d.selected ? 0x4fc3ff : 0xffd400, depthTest: false }),
+      );
+      lines.renderOrder = 21;
+      this.dimGroup.add(lines);
+      const el = document.createElement("div");
+      el.className = "dim-label" + (d.selected ? " selected" : "");
+      el.textContent = d.text;
+      el.title = "Click to change this distance (Delete removes it)";
+      el.addEventListener("pointerdown", (e) => e.stopPropagation());
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.onDimClick?.(d.id);
+      });
+      // An open value box moves into the re-drawn label, keeping focus and text.
+      if (this.dimEdit?.id === d.id) {
+        el.textContent = "";
+        el.appendChild(this.dimEdit.input);
+      }
+      this.dimLayer.appendChild(el);
+      this.dimLabels.push({ id: d.id, at: d.labelAt, el });
+    }
+    if (this.dimEdit !== null && !dims.some((d) => d.id === this.dimEdit!.id)) this.dimEdit = null; // its dimension is gone
+    if (hadFocus) this.dimEdit?.input.focus();
+    this.requestRender();
+  }
+
+  /** True while a dimension value box is open. */
+  hasDimEdit(): boolean {
+    return this.dimEdit !== null;
+  }
+
+  /** Puts the caret back in the open value box (keys typed on the view go there). */
+  focusDimEdit(): boolean {
+    if (this.dimEdit === null) return false;
+    this.dimEdit.input.focus();
+    return true;
+  }
+
+  /** Confirms the open value box, as Enter in it would. */
+  commitDimEdit(): void {
+    this.dimEdit?.finish(true);
+  }
+
+  /** Opens an inline number box on a dimension label. */
+  editDimLabel(id: string, value: string, commit: (text: string) => void): void {
+    const label = this.dimLabels.find((l) => l.id === id);
+    if (label === undefined) return;
+    this.dimEdit?.finish(true); // only one box at a time
+    const input = document.createElement("input");
+    input.className = "dim-input";
+    input.value = value;
+    input.spellcheck = false;
+    label.el.textContent = "";
+    label.el.appendChild(input);
+    let done = false;
+    const finish = (ok: boolean): void => {
+      if (done) return;
+      done = true;
+      if (this.dimEdit?.input === input) this.dimEdit = null;
+      if (ok) commit(input.value.trim());
+      else commit(value);
+      this.canvas.focus();
+    };
+    this.dimEdit = { id, input, finish };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") finish(true);
+      else if (e.key === "Escape") finish(false);
+    });
+    // Blur commits only when the user really moved on (not when a re-draw
+    // briefly detached the box and put the focus straight back).
+    input.addEventListener("blur", () => {
+      setTimeout(() => {
+        if (!done && document.activeElement !== input && this.dimEdit?.input === input) {
+          // Focus went to the 3D view itself: keep the box open (typing is redirected to it).
+          if (document.activeElement === this.canvas) return;
+          finish(true);
+        }
+      }, 0);
+    });
+    input.focus();
+    input.select();
+  }
+
+  private placeDimLabels(): void {
+    const frame = this.dimFrame;
+    if (frame === null || this.dimLabels.length === 0) return;
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    for (const l of this.dimLabels) {
+      const s = v3(localTo3d(frame, l.at)).project(this.camera);
+      l.el.style.left = `${((s.x + 1) / 2) * w}px`;
+      l.el.style.top = `${((1 - s.y) / 2) * h}px`;
+    }
+  }
+
+  setHighlightLines(frame: Frame | null, segments: readonly [Point, Point][]): void {
+    const old = this.markerGroup.children.filter((c) => c.userData.kind === "hl");
+    for (const o of old) {
+      disposeChildren(o);
+      this.markerGroup.remove(o);
+      (o as THREE.LineSegments).geometry?.dispose();
+    }
+    if (frame !== null && segments.length > 0) {
+      const lines = new THREE.LineSegments(
+        segmentsGeometry(segments.map(([a, b]) => [v3(localTo3d(frame, a)), v3(localTo3d(frame, b))])),
+        new THREE.LineBasicMaterial({ color: 0xffd400, depthTest: false }),
+      );
+      lines.userData.kind = "hl";
+      lines.userData.screenPx = 1; // not rescaled meaningfully; lines have no size
+      lines.renderOrder = 19;
+      this.markerGroup.add(lines);
+    }
+    this.requestRender();
+  }
+
+  /** Click-on-any-flat-face picking (Hole): the face under the cursor and
+   *  the point on it, snapped to that face's own edge ends / midpoints /
+   *  circle centres. */
+  setSurfacePointMode(): void {
+    this.setPickMode("none");
+    this.pickMode = "surfacePoint";
+  }
+
+  /** Placed points (e.g. hole centres) + the live hover marker. */
+  /** `colors[i]` overrides placed marker i's colour (e.g. green = locked hole). */
+  setMarkers(
+    frame: Frame | null,
+    placed: readonly Point[],
+    hover: { point: Point; snap: string | null } | null,
+    colors: readonly string[] = [],
+  ): void {
+    for (const c of this.markerGroup.children.filter((o) => o.userData.kind !== "hl")) {
+      disposeChildren(c);
+      this.markerGroup.remove(c);
+    }
+    if (frame !== null) {
+      placed.forEach((p, i) => this.markerGroup.add(markerSprite(v3(localTo3d(frame, p)), colors[i] ?? "#ff5a5a", "x")));
+      if (hover !== null) {
+        this.markerGroup.add(markerSprite(v3(localTo3d(frame, hover.point)), hover.snap !== null ? "#ffd400" : "#ffffff", hover.snap !== null ? "box" : "x"));
+      }
+    }
+    this.requestRender();
+  }
+
   setPickMode(mode: "none" | "plane" | "region", regions: readonly PickableRegion[] = []): void {
+    this.faceFrame = null;
+    this.snapCandidates = [];
+    disposeChildren(this.markerGroup);
     this.pickMode = mode;
     this.hovered = null;
     this.selectedRegions.clear();
@@ -519,6 +739,54 @@ export class ModelView {
       -((e.clientY - rect.top) / rect.height) * 2 + 1,
     );
     this.raycaster.setFromCamera(ndc, this.camera);
+    if (this.pickMode === "facePoint" && this.faceFrame !== null) {
+      const frame = this.faceFrame;
+      // Osnap first: nearest candidate within SNAP_PX on screen.
+      let best: SnapCandidate | null = null;
+      let bestD = SNAP_PX;
+      for (const c of this.snapCandidates) {
+        const s = v3(localTo3d(frame, c.point)).project(this.camera);
+        const px = ((s.x + 1) / 2) * rect.width - (e.clientX - rect.left);
+        const py = ((1 - s.y) / 2) * rect.height - (e.clientY - rect.top);
+        const d = Math.hypot(px, py);
+        if (d < bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+      if (best !== null) return { kind: "facePoint", point: best.point, snap: best.kind };
+      // Otherwise where the ray meets the face's plane.
+      const ray = this.raycaster.ray;
+      const n = new THREE.Vector3(frame.n.x, frame.n.y, frame.n.z);
+      const denom = n.dot(ray.direction);
+      if (Math.abs(denom) < 1e-9) return null;
+      const t = n.clone().dot(v3(frame.origin).sub(ray.origin)) / denom;
+      const hit = ray.origin.clone().addScaledVector(ray.direction, t);
+      const d = sub({ x: hit.x, y: hit.y, z: hit.z }, frame.origin);
+      return { kind: "facePoint", point: { x: dot(d, frame.u), y: dot(d, frame.v) }, snap: null };
+    }
+    if (this.pickMode === "surfacePoint") {
+      const h = this.raycaster.intersectObjects(this.bodyMeshes, false)[0];
+      const body = h?.object.userData.body as Body | undefined;
+      const faceId = h?.faceIndex == null || body === undefined ? undefined : body.mesh.faceIds[h.faceIndex];
+      const face = faceId === undefined ? undefined : body!.faces[faceId];
+      if (h === undefined || body === undefined || face?.geom.kind !== "plane") return null;
+      const frame = faceFrame(face.geom.origin, face.geom.normal);
+      // Osnap to this face's own edges, within SNAP_PX on screen.
+      let best: { point: Point; kind: string } | null = null;
+      let bestD = SNAP_PX;
+      for (const c of this.faceSnaps(body, face.id, frame)) {
+        const s = v3(localTo3d(frame, c.point)).project(this.camera);
+        const d = Math.hypot(((s.x + 1) / 2) * rect.width - (e.clientX - rect.left), ((1 - s.y) / 2) * rect.height - (e.clientY - rect.top));
+        if (d < bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+      const d = sub({ x: h.point.x, y: h.point.y, z: h.point.z }, frame.origin);
+      const raw = { x: dot(d, frame.u), y: dot(d, frame.v) };
+      return { kind: "surfacePoint", ref: face.ref, body, faceId: face.id, frame, point: best?.point ?? raw, raw, snap: best?.kind ?? null };
+    }
     if (this.pickMode === "plane") {
       // Nearest of: origin/work planes, or a FLAT face of a solid.
       const hits = this.raycaster.intersectObjects(
@@ -547,8 +815,44 @@ export class ModelView {
     return first === undefined ? null : { kind: "region", region: first };
   }
 
+  /** Snap points of one face, cached per (body, face) until bodies change. */
+  private snapCache = new Map<Body, Map<number, FaceSnap[]>>();
+
+  private faceSnaps(body: Body, faceId: number, frame: Frame): FaceSnap[] {
+    let perBody = this.snapCache.get(body);
+    if (perBody === undefined) {
+      perBody = new Map();
+      this.snapCache.set(body, perBody);
+    }
+    let snaps = perBody.get(faceId);
+    if (snaps === undefined) {
+      snaps = edgesOnFace(body, frame).snaps;
+      perBody.set(faceId, snaps);
+    }
+    return snaps;
+  }
+
+  /** Live hover feedback in face-point mode (the controller draws markers). */
+  onFacePointHover: ((hit: { point: Point; snap: string | null } | null) => void) | null = null;
+  /** Live hover feedback in surface-point mode (null = not over a flat face). */
+  onSurfaceHover: ((hit: Extract<Hit, { kind: "surfacePoint" }> | null) => void) | null = null;
+
   private onHover(e: PointerEvent): void {
     if (this.pickMode === "none" || this.downPos !== null) return;
+    if (this.pickMode === "surfacePoint") {
+      const hit = this.pick(e);
+      const s = hit?.kind === "surfacePoint" ? hit : null;
+      this.highlightFace(s === null ? null : { kind: "face", ref: s.ref, body: s.body, faceId: s.faceId });
+      this.canvas.style.cursor = s === null ? "" : "crosshair";
+      this.onSurfaceHover?.(s);
+      this.requestRender();
+      return;
+    }
+    if (this.pickMode === "facePoint") {
+      const hit = this.pick(e);
+      this.onFacePointHover?.(hit?.kind === "facePoint" ? hit : null);
+      return;
+    }
     const hit = this.pick(e);
     const same =
       (hit === null && this.hovered === null) ||
@@ -711,7 +1015,11 @@ export class ModelView {
       // Constant on-screen UCS icon size: ortho world units per pixel = 1/zoom.
       this.ucsIcon.scale.setScalar(55 / this.camera.zoom);
       this.originGroup.scale.setScalar(95 / this.camera.zoom);
+      for (const m of this.markerGroup.children) {
+        if (m.userData.kind !== "hl") m.scale.setScalar((m.userData.screenPx as number) / this.camera.zoom);
+      }
       this.renderer.render(this.scene, this.camera);
+      this.placeDimLabels();
       this.viewCube.sync(this.camera, this.controls.target);
     });
   }
@@ -731,6 +1039,32 @@ function namedDirection(d: THREE.Vector3): string {
   if (near(1, 1, 1)) return "NE Isometric";
   if (near(-1, 1, 1)) return "NW Isometric";
   return "Custom View";
+}
+
+/** Constant-size screen marker: "x" cross or osnap "box". */
+function markerSprite(position: THREE.Vector3, color: string, shape: "x" | "box"): THREE.Sprite {
+  const c = document.createElement("canvas");
+  c.width = 32;
+  c.height = 32;
+  const ctx = c.getContext("2d")!;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  if (shape === "box") ctx.strokeRect(6, 6, 20, 20);
+  else {
+    ctx.beginPath();
+    ctx.moveTo(6, 6);
+    ctx.lineTo(26, 26);
+    ctx.moveTo(26, 6);
+    ctx.lineTo(6, 26);
+    ctx.stroke();
+  }
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, sizeAttenuation: false }),
+  );
+  sprite.position.copy(position);
+  sprite.userData.screenPx = 16; // rescaled per frame (ortho camera: world-unit sizes)
+  sprite.renderOrder = 20;
+  return sprite;
 }
 
 function textSprite(text: string, position: THREE.Vector3): THREE.Sprite {

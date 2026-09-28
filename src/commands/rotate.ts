@@ -80,7 +80,8 @@ export class RotateCommand extends PickTransformCommand {
         : point;
 
     if (this.state === 2 && this.basePoint !== null) {
-      const angleDeg = (this.angleTo(this.currentMousePos) * 180) / Math.PI;
+      // Shown AutoCAD-style: counter-clockwise positive (world is Y-down).
+      const angleDeg = (-this.angleTo(this.currentMousePos) * 180) / Math.PI;
       this.commandBar.setLiveValue(angleDeg.toFixed(1));
     }
     this.engine.requestRedraw();
@@ -93,7 +94,9 @@ export class RotateCommand extends PickTransformCommand {
       this.commandBar.setStatus("ROTATE", "Invalid - enter an angle in degrees");
       return;
     }
-    this.executeRotate((angleDeg * Math.PI) / 180);
+    // Typed +angle turns counter-clockwise on screen, as in AutoCAD: in the
+    // Y-down world that is a negative rotation.
+    this.executeRotate((-angleDeg * Math.PI) / 180);
   }
 
   private executeRotate(angleRad: number): void {

@@ -151,7 +151,7 @@ describe("LeaderCommand", () => {
     const cmd = new LeaderCommand(engine);
     cmd.start();
     cmd.leftClick({ x: 0, y: 0 });
-    cmd.textInput("20,-10");
+    cmd.textInput("20,10"); // typed Y up -> world (20, -10)
     cmd.textInput("Typed landing works");
 
     const created = dims(engine);
