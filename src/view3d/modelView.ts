@@ -13,7 +13,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import earcut from "earcut";
+import { triangulate } from "../part/kernel/triangulate";
 import { ViewCube } from "./viewCube";
 import type { Body, Edge, TopoRef } from "../part/kernel/types";
 import type { Frame } from "../part/plane";
@@ -42,6 +42,7 @@ const PLANE_COLOR = 0xe8b04a;
 const WORKPLANE_COLOR = 0x6fcf97;
 const REGION_COLOR = 0x3d8bfd;
 const PREVIEW_COLOR = 0x5fa8ff;
+const CUT_PREVIEW_COLOR = 0xff5a5a;
 
 export interface PickableRegion {
   sketchId: string;
@@ -123,7 +124,7 @@ function regionGeometry(region: Region, frame: Frame): THREE.BufferGeometry {
       pts.push(p);
     }
   });
-  const tris = earcut(flat, holes, 2);
+  const tris = triangulate(flat, holes);
   const pos: number[] = [];
   for (const p of pts) {
     const w = localTo3d(frame, p, 0);
@@ -453,14 +454,15 @@ export class ModelView {
     this.requestRender();
   }
 
-  setPreview(body: Body | null): void {
+  /** Tool preview: blue for new/join, red for a cut. */
+  setPreview(body: Body | null, cut = false): void {
     disposeChildren(this.previewGroup);
     if (body !== null) {
       this.previewGroup.add(
         new THREE.Mesh(
           bodyGeometry(body),
           new THREE.MeshStandardMaterial({
-            color: PREVIEW_COLOR,
+            color: cut ? CUT_PREVIEW_COLOR : PREVIEW_COLOR,
             transparent: true,
             opacity: 0.55,
             depthWrite: false,

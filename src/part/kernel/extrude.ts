@@ -6,7 +6,7 @@
  * closed, outward-wound triangle mesh plus exact analytic faces/edges.
  */
 
-import earcut from "earcut";
+import { triangulate } from "./triangulate";
 import type { Point } from "../../core/types";
 import type { Frame } from "../plane";
 import { localTo3d } from "../plane";
@@ -113,7 +113,7 @@ export function extrudeRegions(featureId: string, regions: readonly Region[], fr
         pts2d.push(p);
       }
     }
-    const tris = earcut(flat, holeIdx, 2);
+    const tris = triangulate(flat, holeIdx);
     const startFace = addFace(ref("start", `${ri}`), { kind: "plane", origin: localTo3d(frame, pts2d[0]!, h0), normal: negN });
     const endFace = addFace(ref("end", `${ri}`), { kind: "plane", origin: localTo3d(frame, pts2d[0]!, h1), normal: frame.n });
     const bottom = pts2d.map((p) => mb.vertex(localTo3d(frame, p, h0), negN));

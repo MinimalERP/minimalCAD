@@ -62,6 +62,12 @@ export interface SketchData {
 
 export type ExtrudeDirection = "normal" | "reverse" | "symmetric";
 
+/** New solid, merge into the solids it touches, or remove material. */
+export type FeatureOperation = "new" | "join" | "cut";
+
+/** A fixed distance, or all the way through the existing model. */
+export type ExtrudeExtent = "distance" | "through";
+
 export interface ExtrudeFeature {
   id: string;
   type: "extrude";
@@ -73,7 +79,9 @@ export interface ExtrudeFeature {
   /** Expression: a number or parameter arithmetic, e.g. "d1*2". */
   distance: string;
   direction: ExtrudeDirection;
-  operation: "new";
+  operation: FeatureOperation;
+  /** Absent = "distance" (older files). */
+  extent?: ExtrudeExtent;
   suppressed?: boolean;
 }
 
@@ -141,7 +149,8 @@ function parseFeature(raw: unknown): FeatureData | null {
       profiles,
       distance: typeof raw.distance === "number" ? String(raw.distance) : String(raw.distance ?? "10"),
       direction,
-      operation: "new",
+      operation: raw.operation === "join" || raw.operation === "cut" ? raw.operation : "new",
+      ...(raw.extent === "through" ? { extent: "through" as const } : {}),
       suppressed: raw.suppressed === true,
     };
   }

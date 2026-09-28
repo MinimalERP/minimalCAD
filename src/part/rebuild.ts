@@ -9,6 +9,8 @@
 
 import { parseEntities } from "../core/document";
 import { extrudeRegions } from "./kernel/extrude";
+import { subtract, union } from "./kernel/csg";
+import { bodyBounds, bodyToPolygons, boundsOverlap, polygonsToBody } from "./kernel/brep";
 import type { Body } from "./kernel/types";
 import { resolveParameters, evalExpression } from "./params";
 import { faceFrame, offsetFrame, planeFrame, toLocal, workPlaneFrame } from "./plane";
@@ -65,8 +67,8 @@ export function resolveWorkPlanes(part: PartData, params: ReadonlyMap<string, nu
 
 /** Frame of a flat face (by topological ref) among `bodies`, or null. */
 export function faceFrameOf(bodies: readonly Body[], ref: NonNullable<PlaneRef["face"]>): Frame | null {
+  // Any body: after a join/cut a feature's faces live in another feature's body.
   for (const body of bodies) {
-    if (body.feature !== ref.feature) continue;
     const face = body.faces.find((f) => f.ref.role === ref.role && f.ref.index === ref.index);
     if (face?.geom.kind === "plane") return faceFrame(face.geom.origin, face.geom.normal);
   }
@@ -141,6 +143,68 @@ export function drawingSketch(entities: Record<string, unknown>[]): SketchData {
 
 /** `drawingEntities`: the Document's own 2D entities (serialized), which
  *  form the XY base sketch that features may reference as DRAWING_SKETCH. */
+/** Long enough to pass through every body from anywhere on `frame`'s plane. */
+export function throughLength(bodies: readonly Body[], frame: Frame): number {
+  if (bodies.length === 0) return 0;
+  let span = 0;
+  for (const b of bodies) {
+    const { min, max } = bodyBounds(b);
+    const corners = [min, max].flatMap((x) => [min, max].flatMap((y) => [min, max].map((z) => ({ x: x.x, y: y.y, z: z.z }))));
+    for (const c of corners) {
+      span = Math.max(span, Math.abs(c.x - frame.origin.x) + Math.abs(c.y - frame.origin.y) + Math.abs(c.z - frame.origin.z));
+    }
+  }
+  return span * 2 + 1;
+}
+
+/**
+ * Applies a feature's tool body to the model (in place) -- the solid
+ * booleans are our own (kernel/csg.ts + kernel/brep.ts).
+ *  - new:  the tool becomes a separate body;
+ *  - join: merged with every body it touches (all into one); alone if none;
+ *  - cut:  removed from every body it touches.
+ */
+export function applyOperation(bodies: Body[], tool: Body, operation: ExtrudeFeature["operation"]): FeatureStatus {
+  if (operation === "new") {
+    bodies.push(tool);
+    return { ok: true };
+  }
+  const hit = bodies.filter((b) => boundsOverlap(b, tool));
+  if (operation === "join") {
+    if (hit.length === 0) {
+      bodies.push(tool);
+      return { ok: true };
+    }
+    let faces = [...hit[0]!.faces];
+    let polys = bodyToPolygons(hit[0]!, 0);
+    for (const other of [...hit.slice(1), tool]) {
+      const offset = faces.length;
+      faces = [...faces, ...other.faces];
+      polys = union(polys, bodyToPolygons(other, offset));
+    }
+    const merged = polygonsToBody(hit[0]!.id, hit[0]!.feature, polys, faces);
+    const at = bodies.indexOf(hit[0]!);
+    for (const b of hit) bodies.splice(bodies.indexOf(b), 1);
+    bodies.splice(at, 0, merged);
+    return { ok: true };
+  }
+  // cut
+  if (hit.length === 0) return { ok: false, error: "Cut removed nothing - the shape doesn't reach the solid" };
+  let removed = false;
+  for (const b of hit) {
+    const faces = [...b.faces, ...tool.faces];
+    const polys = subtract(bodyToPolygons(b, 0), bodyToPolygons(tool, b.faces.length));
+    // The tool never actually touched this body (only its bounding box did).
+    if (polys.length > 0 && !polys.some((p) => p.faceId >= b.faces.length)) continue;
+    const result = polygonsToBody(b.id, b.feature, polys, faces);
+    removed = true;
+    const at = bodies.indexOf(b);
+    if (result.mesh.indices.length === 0) bodies.splice(at, 1);
+    else bodies[at] = result;
+  }
+  return removed ? { ok: true } : { ok: false, error: "Cut removed nothing - the shape doesn't reach the solid" };
+}
+
 export function rebuild(part: PartData, drawingEntities: Record<string, unknown>[] = []): RebuildResult {
   const params = resolveParameters(part.parameters);
   const planes = resolveWorkPlanes(part, params);
@@ -172,7 +236,8 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
       status.set(feature.id, { ok: false, error: `Sketch ${feature.sketch} is missing or its plane is broken` });
       continue;
     }
-    const distance = evalExpression(feature.distance, params);
+    const through = feature.extent === "through";
+    const distance = through ? throughLength(bodies, geo.frame) : evalExpression(feature.distance, params);
     if (distance === null || !(distance > 0)) {
       status.set(feature.id, { ok: false, error: `Invalid distance "${feature.distance}"` });
       continue;
@@ -188,9 +253,10 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
       });
       continue;
     }
-    const [h0, h1] = extrudeExtent(feature.direction, distance);
-    bodies.push(extrudeRegions(feature.id, regions, geo.frame, h0, h1));
-    status.set(feature.id, { ok: true });
+    // Through all: the tool reaches past the model in the chosen direction(s).
+    const [h0, h1] = through && feature.direction === "symmetric" ? [-distance, distance] : extrudeExtent(feature.direction, distance);
+    const tool = extrudeRegions(feature.id, regions, geo.frame, h0, h1);
+    status.set(feature.id, applyOperation(bodies, tool, feature.operation));
   }
   for (const sketch of part.sketches) resolveSketch(sketch.id);
   return { bodies, status, sketches, planes, params };

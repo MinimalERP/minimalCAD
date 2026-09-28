@@ -23,7 +23,7 @@ import { Arc } from "../entities/arc";
 import { Circle } from "../entities/circle";
 import { Ellipse } from "../entities/ellipse";
 import { Polyline } from "../entities/polyline";
-import earcut from "earcut";
+import { triangulate } from "./kernel/triangulate";
 import { fromLocal, toLocal } from "./plane";
 
 export type Segment =
@@ -311,7 +311,7 @@ export function regionSeed(region: Region): Point & { area: number } {
       pts.push(p);
     }
   });
-  const tris = earcut(flat, holeIdx, 2);
+  const tris = triangulate(flat, holeIdx);
   // Largest triangle: its centroid is the least sensitive to later small edits.
   let best = 0;
   let bestArea = -1;

@@ -22,9 +22,9 @@ import type { Engine } from "../engine/engine";
 import type { ModelAction } from "../ui/toolbar";
 import { showToast } from "../ui/toast";
 import { parseEntities } from "../core/document";
-import type { ExtrudeDirection, ExtrudeFeature, PartData, PlaneRef, WorkPlane } from "../part/types";
+import type { ExtrudeDirection, ExtrudeFeature, FeatureOperation, PartData, PlaneRef, WorkPlane } from "../part/types";
 import { DRAWING_SKETCH, emptyPart, isBasePlane, nextId, parsePart } from "../part/types";
-import { extrudeExtent, rebuild, resolvePlane, selectRegions } from "../part/rebuild";
+import { extrudeExtent, rebuild, resolvePlane, selectRegions, throughLength } from "../part/rebuild";
 import { projectBodies } from "../part/project";
 import type { Entity } from "../entities/entity";
 import { axisName } from "../part/plane";
@@ -70,9 +70,15 @@ type State =
       sketchId: string;
       profiles: ExtrudeFeature["profiles"];
       direction: ExtrudeDirection;
+      operation: FeatureOperation;
+      through: boolean;
+      /** The height text as typed (kept while option hotkeys are pressed). */
+      value: string | null;
       /** Set when editing an existing feature rather than creating one. */
       editing: string | null;
     };
+
+const OPERATION_LABEL: Record<FeatureOperation, string> = { new: "New solid", join: "Join", cut: "Cut" };
 
 const DIRECTION_LABEL: Record<ExtrudeDirection, string> = {
   normal: "one side",
@@ -272,7 +278,15 @@ export class ModelController {
   }
 
   private onLiveText(text: string): void {
-    if (this.state.kind === "distance") this.updateExtrudePreview(text);
+    if (this.state.kind === "distance") {
+      // Option letters act instantly (no Enter), and never replace the height.
+      if (/^[jcnfst]$/i.test(text.trim())) {
+        this.applyExtrudeOption(text.trim().toLowerCase());
+        return;
+      }
+      this.state.value = text;
+      this.updateExtrudePreview(text);
+    }
     else if (this.state.kind === "wpOffset") this.updatePlanePreview({ ...this.state.draft, offset: text });
     else if (this.state.kind === "wpAngle") this.updatePlanePreview({ ...this.state.draft, angle: text });
   }
@@ -424,13 +438,7 @@ export class ModelController {
     const fresh = all.filter((r) => !this.consumed(part, r.sketchId, r.region));
     const candidates = fresh.length > 0 ? fresh : all;
     if (candidates.length === 1) {
-      this.state = {
-        kind: "distance",
-        sketchId: candidates[0]!.sketchId,
-        profiles: this.profilesFor([candidates[0]!], candidates),
-        direction: "normal",
-        editing: null,
-      };
+      this.state = this.newExtrude(candidates[0]!.sketchId, this.profilesFor([candidates[0]!], candidates));
       this.promptDistance();
       return;
     }
@@ -438,6 +446,26 @@ export class ModelController {
     this.showWireframes(part, new Set(candidates.map((c) => c.sketchId)));
     this.view.setPickMode("region", candidates);
     this.prompt("EXTRUDE", "Click the closed shape(s) to extrude, then Enter");
+  }
+
+  /** A fresh Extrude: Join when there's already a solid, else a new one. */
+  private newExtrude(sketchId: string, profiles: ExtrudeFeature["profiles"]): Extract<State, { kind: "distance" }> {
+    const hasSolid = (this.result?.bodies.length ?? 0) > 0;
+    return {
+      kind: "distance",
+      sketchId,
+      profiles,
+      direction: "normal",
+      operation: hasSolid ? "join" : "new",
+      through: false,
+      value: null,
+      editing: null,
+    };
+  }
+
+  /** Sketches on a solid's face face outward: cutting goes the other way. */
+  private sketchOnFace(sketchId: string): boolean {
+    return this.part().sketches.find((s) => s.id === sketchId)?.plane.base === "face";
   }
 
   /** How a feature records its chosen regions. The 2D drawing keeps growing,
@@ -470,13 +498,7 @@ export class ModelController {
       return;
     }
     this.view.setPickMode("none");
-    this.state = {
-      kind: "distance",
-      sketchId: chosen[0]!.sketchId,
-      profiles: this.profilesFor(chosen, candidates),
-      direction: "normal",
-      editing: null,
-    };
+    this.state = this.newExtrude(chosen[0]!.sketchId, this.profilesFor(chosen, candidates));
     this.promptDistance();
   }
 
@@ -484,16 +506,37 @@ export class ModelController {
     if (this.state.kind !== "distance") return;
     const s = this.state;
     const existing = s.editing !== null ? this.part().features.find((f) => f.id === s.editing)?.distance : undefined;
-    const current = this.host.commandBar.text();
-    const value = current !== "" && !/^[fs]$/i.test(current) ? current : (existing ?? "10");
-    this.prompt("EXTRUDE", `Height (${DIRECTION_LABEL[s.direction]}) - Enter to accept | F flip | S symmetric`, value);
+    const value = s.value ?? existing ?? "10";
+    s.value = value;
+    const extent = s.through ? "through all" : "height";
+    this.prompt(
+      "EXTRUDE",
+      `${OPERATION_LABEL[s.operation]}, ${extent} (${DIRECTION_LABEL[s.direction]}) - Enter | J join  C cut  N new | F flip  S symmetric  T through all`,
+      value,
+    );
     this.updateExtrudePreview(value);
   }
 
   private acceptDistance(t: string): void {
     if (this.state.kind !== "distance") return;
     const s = this.state;
-    const lower = t.toLowerCase();
+    if (/^[jcnfst]$/i.test(t)) {
+      this.applyExtrudeOption(t.toLowerCase());
+      return;
+    }
+    if (t === "" && s.value !== null) t = s.value;
+    const value = s.through ? 1 : evalExpression(t, this.params());
+    if (value === null || !(value > 0)) {
+      this.prompt("EXTRUDE", `Invalid height "${t}" - enter a positive value`);
+      return;
+    }
+    this.commitExtrude(s, t);
+  }
+
+  /** J/C/N operation, F flip, S symmetric, T through all. */
+  private applyExtrudeOption(lower: string): void {
+    if (this.state.kind !== "distance") return;
+    const s = this.state;
     if (lower === "f") {
       s.direction = s.direction === "normal" ? "reverse" : "normal";
       this.promptDistance();
@@ -504,11 +547,22 @@ export class ModelController {
       this.promptDistance();
       return;
     }
-    const value = evalExpression(t, this.params());
-    if (value === null || !(value > 0)) {
-      this.prompt("EXTRUDE", `Invalid height "${t}" - enter a positive value`);
+    if (lower === "j" || lower === "c" || lower === "n") {
+      const op: FeatureOperation = lower === "j" ? "join" : lower === "c" ? "cut" : "new";
+      // Cutting from a face sketch goes into the material by default.
+      if (op === "cut" && s.operation !== "cut" && this.sketchOnFace(s.sketchId) && s.direction === "normal") s.direction = "reverse";
+      if (op !== "cut" && s.operation === "cut" && this.sketchOnFace(s.sketchId) && s.direction === "reverse") s.direction = "normal";
+      s.operation = op;
+      this.promptDistance();
       return;
     }
+    if (lower === "t") {
+      s.through = !s.through;
+      this.promptDistance();
+    }
+  }
+
+  private commitExtrude(s: Extract<State, { kind: "distance" }>, t: string): void {
     this.state = { kind: "idle" };
     this.view.setPreview(null);
     const hadBodies = (this.result?.bodies.length ?? 0) > 0;
@@ -516,8 +570,11 @@ export class ModelController {
       if (s.editing !== null) {
         const f = part.features.find((x) => x.id === s.editing);
         if (f !== undefined) {
-          f.distance = t;
+          if (!s.through) f.distance = t;
           f.direction = s.direction;
+          f.operation = s.operation;
+          if (s.through) f.extent = "through";
+          else delete f.extent;
         }
         return;
       }
@@ -526,9 +583,10 @@ export class ModelController {
         type: "extrude",
         sketch: s.sketchId,
         profiles: s.profiles,
-        distance: t,
+        distance: s.through ? "10" : t,
         direction: s.direction,
-        operation: "new",
+        operation: s.operation,
+        ...(s.through ? { extent: "through" as const } : {}),
       });
     });
     this.host.commandBar.setReady();
@@ -538,22 +596,38 @@ export class ModelController {
   private updateExtrudePreview(text: string): void {
     if (this.state.kind !== "distance") return;
     const s = this.state;
-    const distance = evalExpression(text, this.params());
     const geo = this.result?.sketches.get(s.sketchId);
+    const distance = s.through
+      ? geo === undefined
+        ? null
+        : throughLength(this.result?.bodies ?? [], geo.frame)
+      : evalExpression(text, this.params());
     if (distance === null || !(distance > 0) || geo === undefined) {
       this.view.setPreview(null);
       return;
     }
     const regions = selectRegions(geo.profiles.regions, s.profiles);
-    const [h0, h1] = extrudeExtent(s.direction, distance);
-    this.view.setPreview(regions.length > 0 ? extrudeRegions("preview", regions, geo.frame, h0, h1) : null);
+    const [h0, h1] = s.through && s.direction === "symmetric" ? [-distance, distance] : extrudeExtent(s.direction, distance);
+    this.view.setPreview(
+      regions.length > 0 ? extrudeRegions("preview", regions, geo.frame, h0, h1) : null,
+      s.operation === "cut",
+    );
   }
 
   private editFeature(id: string): void {
     const f = this.part().features.find((x) => x.id === id);
     if (f === undefined) return;
     this.cancel();
-    this.state = { kind: "distance", sketchId: f.sketch, profiles: f.profiles, direction: f.direction, editing: id };
+    this.state = {
+      kind: "distance",
+      sketchId: f.sketch,
+      profiles: f.profiles,
+      direction: f.direction,
+      operation: f.operation,
+      through: f.extent === "through",
+      value: null,
+      editing: id,
+    };
     this.promptDistance();
   }
 
@@ -634,7 +708,8 @@ export class ModelController {
         if (f.sketch !== sketchId) continue;
         const st = this.result?.status.get(f.id);
         const value = evalExpression(f.distance, this.params());
-        const shown = value === null ? f.distance : `${+value.toFixed(3)} mm`;
+        const amount = f.extent === "through" ? "through all" : value === null ? f.distance : `${+value.toFixed(3)} mm`;
+        const shown = `${OPERATION_LABEL[f.operation]} ${amount}`;
         row(f.id, f.id, shown, "▣", () => this.editFeature(f.id), {
           indent: true,
           error: st?.ok === false ? st.error : undefined,

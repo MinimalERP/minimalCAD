@@ -374,3 +374,43 @@ describe("sketch on a face", () => {
     expect(parsePart(JSON.parse(JSON.stringify(part)))?.sketches[0]!.plane.face?.feature).toBe("Extrude001");
   });
 });
+
+describe("join / cut features in rebuild", () => {
+  it("plate + face sketch circle cut through all = plate with a through hole; old files default to new", () => {
+    const part = emptyPart();
+    part.features.push({
+      id: "Extrude001",
+      type: "extrude",
+      sketch: "Drawing",
+      profiles: "all",
+      distance: "20",
+      direction: "normal",
+      operation: "new",
+    });
+    part.sketches.push({
+      id: "Sketch001",
+      plane: { base: "face", offset: 0, face: { feature: "Extrude001", role: "end", index: "0" } },
+      entities: [new Circle({ x: 50, y: 25 }, 10).serialize()], // world (50, -25): plate spans y -50..0
+      constraints: [],
+    });
+    part.features.push({
+      id: "Extrude002",
+      type: "extrude",
+      sketch: "Sketch001",
+      profiles: "all",
+      distance: "10",
+      direction: "reverse",
+      operation: "cut",
+      extent: "through",
+    });
+    const result = rebuild(parsePart(JSON.parse(JSON.stringify(part)))!, rectLines(100, 50).map((e) => e.serialize()));
+    expect(result.status.get("Extrude002")).toEqual({ ok: true });
+    expect(result.bodies).toHaveLength(1);
+    const hole = 0.5 * 72 * 100 * Math.sin((2 * Math.PI) / 72);
+    expect(meshVolume(result.bodies[0]!.mesh.positions, result.bodies[0]!.mesh.indices)).toBeCloseTo((5000 - hole) * 20, 2);
+
+    const legacy = parsePart({ features: [{ id: "E", type: "extrude", sketch: "Drawing", distance: 5 }] });
+    expect(legacy?.features[0]!.operation).toBe("new");
+    expect(legacy?.features[0]!.extent).toBeUndefined();
+  });
+});
