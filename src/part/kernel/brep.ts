@@ -16,6 +16,7 @@
  */
 
 import type { Body, Edge, Face, TopoRef } from "./types";
+import { sameRef } from "./types";
 import type { Polygon } from "./csg";
 import { makePolygon } from "./csg";
 import type { Vec3 } from "../vec3";
@@ -265,6 +266,15 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
       if (key !== null) byKey.set(key, p.faceId);
     }
   }
+  // Every ref merged into a surviving face stays findable (as an alias).
+  const merged = new Map<number, TopoRef[]>();
+  for (const [from, to] of canonical) {
+    const list = merged.get(to) ?? [];
+    for (const r of [faces[from]!.ref, ...(faces[from]!.aliases ?? [])]) {
+      if (!sameRef(r, faces[to]!.ref) && !list.some((x) => sameRef(x, r))) list.push(r);
+    }
+    merged.set(to, list);
+  }
   const newIndex = new Map<number, number>();
   const outFaces: Face[] = [];
   for (const p of polys) {
@@ -276,7 +286,10 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
     // result): re-derive it from the actual output polygon.
     const geom: Face["geom"] =
       f.geom.kind === "plane" ? { kind: "plane", origin: pts[p.idx[0]!]!, normal: p.normal } : f.geom;
-    outFaces.push({ id: outFaces.length, ref: f.ref, geom });
+    const face: Face = { id: outFaces.length, ref: f.ref, geom };
+    const aliases = merged.get(src) ?? [];
+    if (aliases.length > 0) face.aliases = aliases;
+    outFaces.push(face);
   }
   const faceOf = (p: { faceId: number }): number => newIndex.get(canonical.get(p.faceId)!)!;
 

@@ -22,6 +22,7 @@
 import type { HoleCenter, HoleDim, HoleFeature, HoleRef, HoleStyle } from "../../part/types";
 import { nextId } from "../../part/types";
 import type { TopoRef } from "../../part/kernel/types";
+import { faceHasRef } from "../../part/kernel/types";
 import { faceFrameOf, rebuild, throughLength } from "../../part/rebuild";
 import { dependsOn, holeTools, refLine, resolveCenters, signedDistance } from "../../part/hole";
 import { edgesOnFace } from "../../part/faceTopology";
@@ -185,13 +186,19 @@ export class HoleCommand implements ModelCommand {
     }
     this.face = face;
     this.frame = frame;
-    const body = bodies.find((b) => b.faces.some((f) => sameRef(f.ref, face)));
+    const body = bodies.find((b) => b.faces.some((f) => faceHasRef(f, face)));
     const topo = body === undefined ? null : edgesOnFace(body, frame);
     this.faceLines = topo?.lines ?? [];
     this.faceCircles = topo?.circles.map((c) => c.center) ?? [];
   }
 
   // --- picking helpers ---
+
+  /** True if the face under the cursor is the one these holes are on. */
+  private isOurFace(hit: Extract<Hit, { kind: "surfacePoint" }>): boolean {
+    const face = hit.body.faces[hit.faceId];
+    return this.face !== null && face !== undefined && faceHasRef(face, this.face);
+  }
 
   private tol(): number {
     return this.ctx.view.pixelSize() * PICK_PX;
@@ -271,7 +278,7 @@ export class HoleCommand implements ModelCommand {
       this.addCenter(hit.point);
       return;
     }
-    if (!sameRef(hit.ref, this.face)) {
+    if (!this.isOurFace(hit)) {
       this.dialog.setError(OTHER_FACE);
       return;
     }
@@ -295,7 +302,7 @@ export class HoleCommand implements ModelCommand {
   }
 
   onSurfaceHover(hit: Extract<Hit, { kind: "surfacePoint" }> | null): void {
-    const onOurFace = hit !== null && (this.face === null || sameRef(hit.ref, this.face));
+    const onOurFace = hit !== null && (this.face === null || this.isOurFace(hit));
     let ref: HoleRef | null = null;
     const sel = this.selection;
     if (onOurFace && this.constrain && sel?.kind === "hole" && (this.centers[sel.i]?.dims?.length ?? 0) < 2) {
@@ -567,6 +574,3 @@ export class HoleCommand implements ModelCommand {
   }
 }
 
-function sameRef(a: TopoRef, b: TopoRef): boolean {
-  return a.feature === b.feature && a.role === b.role && a.index === b.index;
-}

@@ -12,6 +12,7 @@ import { extrudeRegions } from "./kernel/extrude";
 import { subtract, union } from "./kernel/csg";
 import { bodyBounds, bodyToPolygons, boundsOverlap, polygonsToBody } from "./kernel/brep";
 import type { Body } from "./kernel/types";
+import { faceHasRef } from "./kernel/types";
 import { resolveParameters, evalExpression } from "./params";
 import { faceFrame, offsetFrame, planeFrame, toLocal, workPlaneFrame } from "./plane";
 import type { Frame } from "./plane";
@@ -70,7 +71,9 @@ export function resolveWorkPlanes(part: PartData, params: ReadonlyMap<string, nu
 export function faceFrameOf(bodies: readonly Body[], ref: NonNullable<PlaneRef["face"]>): Frame | null {
   // Any body: after a join/cut a feature's faces live in another feature's body.
   for (const body of bodies) {
-    const face = body.faces.find((f) => f.ref.role === ref.role && f.ref.index === ref.index);
+    // The full ref, feature included: every extrude has an "end 0" face (a
+    // cube's top and a boss's top must never be confused).
+    const face = body.faces.find((f) => faceHasRef(f, ref));
     if (face?.geom.kind === "plane") return faceFrame(face.geom.origin, face.geom.normal);
   }
   return null;

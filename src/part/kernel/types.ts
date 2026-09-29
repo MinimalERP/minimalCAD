@@ -35,6 +35,18 @@ export interface Face {
   id: number;
   ref: TopoRef;
   geom: FaceGeom;
+  /** Refs of other faces merged into this one (same surface after a
+   *  boolean) -- a feature that stored any of them still finds this face. */
+  aliases?: TopoRef[];
+}
+
+export function sameRef(a: TopoRef, b: TopoRef): boolean {
+  return a.feature === b.feature && a.role === b.role && a.index === b.index;
+}
+
+/** True if `face` is the face `ref` names (its own ref or a merged one). */
+export function faceHasRef(face: Face, ref: TopoRef): boolean {
+  return sameRef(face.ref, ref) || (face.aliases?.some((a) => sameRef(a, ref)) ?? false);
 }
 
 export type EdgeGeom =

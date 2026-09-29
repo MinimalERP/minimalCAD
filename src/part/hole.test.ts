@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Polyline } from "../entities/polyline";
+import { Circle } from "../entities/circle";
 import { revolveProfile } from "./kernel/revolve";
 import { meshVolume } from "./kernel/extrude";
 import type { Body } from "./kernel/types";
@@ -147,6 +148,59 @@ describe("Hole feature", () => {
     const good = partWith({ centers: [{ x: 50, y: -30 }], diameter: "d", depth: "5", extent: "through", style: "countersink", csDiameter: "20", csAngle: "82" });
     const back = parsePart(JSON.parse(JSON.stringify(good)))!;
     expect(back.features[1]).toEqual(good.features[1] && { ...good.features[1], suppressed: false });
+  });
+
+  it("a hole on a boss's top face drills the boss, not the plate under it (same role/index, other feature)", () => {
+    const part = partWith({ centers: [], diameter: "10", depth: "5", style: "plain" });
+    part.features.pop(); // no hole on the plate
+    part.sketches.push({
+      id: "Sketch001",
+      plane: { base: "face", offset: 0, face: { feature: "Extrude001", role: "end", index: "0" } },
+      entities: [new Circle({ x: 50, y: 30 }, 15).serialize()],
+      constraints: [],
+    });
+    part.features.push({ id: "Extrude002", type: "extrude", sketch: "Sketch001", profiles: "all", distance: "10", direction: "normal", operation: "join" });
+    const bossTop = { feature: "Extrude002", role: "end" as const, index: "0" };
+    const before = rebuild(part, [plate()]);
+    expect(before.bodies).toHaveLength(1);
+    // Both extrudes have an "end 0" face: the boss's top is at z 30, the plate's at 20.
+    expect(faceFrameOf(before.bodies, bossTop)?.origin.z).toBeCloseTo(30);
+    expect(faceFrameOf(before.bodies, { ...bossTop, feature: "Extrude001" })?.origin.z).toBeCloseTo(20);
+
+    part.features.push({ id: "Hole001", type: "hole", face: bossTop, centers: [{ x: 50, y: -30 }], diameter: "10", depth: "5", style: "plain" });
+    const after = rebuild(part, [plate()]);
+    expect(after.status.get("Hole001")).toEqual({ ok: true });
+    const zs = Array.from(after.bodies[0]!.mesh.positions).filter((_, i) => i % 3 === 2);
+    // The hole's bottom rim is 5 below the boss top: a vertex at z = 25.
+    expect(zs.some((z) => Math.abs(z - 25) < 1e-6)).toBe(true);
+    expect(vol(after.bodies[0]!)).toBeLessThan(vol(before.bodies[0]!) - polyArea(5) * 5 + 1e-6);
+  });
+
+  it("faces merged by a join keep every ref: a hole on either block's (now shared) top face works", () => {
+    const part = partWith({ centers: [], diameter: "10", depth: "5", style: "plain" });
+    part.features.pop();
+    const block = new Polyline(
+      [
+        { x: 80, y: 0 },
+        { x: 140, y: 0 },
+        { x: 140, y: 60 },
+        { x: 80, y: 60 },
+      ].map((point) => ({ point, bulge: 0 })),
+      true,
+    ).serialize();
+    part.sketches.push({ id: "Sketch001", plane: { base: "XY", offset: 0 }, entities: [block], constraints: [] });
+    part.features.push({ id: "Extrude002", type: "extrude", sketch: "Sketch001", profiles: "all", distance: "20", direction: "normal", operation: "join" });
+    const before = rebuild(part, [plate()]);
+    expect(before.status.get("Extrude002")).toEqual({ ok: true });
+    const tops = before.bodies[0]!.faces.filter((f) => f.geom.kind === "plane" && Math.abs(f.geom.normal.z - 1) < 1e-9);
+    expect(tops).toHaveLength(1); // one merged top
+    for (const feature of ["Extrude001", "Extrude002"]) {
+      const ref = { feature, role: "end" as const, index: "0" };
+      expect(faceFrameOf(before.bodies, ref)?.origin.z).toBeCloseTo(20);
+      const withHole = structuredClone(part);
+      withHole.features.push({ id: "Hole001", type: "hole", face: ref, centers: [{ x: 120, y: -30 }], diameter: "10", depth: "5", style: "plain" });
+      expect(rebuild(withHole, [plate()]).status.get("Hole001")).toEqual({ ok: true });
+    }
   });
 });
 
