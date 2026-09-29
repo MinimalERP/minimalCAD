@@ -93,7 +93,11 @@ export type HoleStyle = "plain" | "counterbore" | "countersink";
  *    so moving that hole moves this one;
  *  - "point": a fixed point, e.g. the centre of a circle already on the face.
  *  From a point, the distance runs along the face's horizontal ("u") or
- *  vertical ("v") direction. */
+ *  vertical ("v") direction.
+ *  On a round face (radial) the same kinds work in its (along-axis mm,
+ *  angle deg) coordinates: an end-face rim is an "edge" x = const, an
+ *  angle reference (a plane / flat / seam) an "edge" y = const, and "u" /
+ *  "v" from a hole mean along the axis / around it. */
 export type HoleRef =
   | { kind: "edge"; seg: [Point, Point] }
   | { kind: "hole"; index: number; axis: "u" | "v" }
@@ -112,19 +116,24 @@ export interface HoleCenter extends Point {
   dims?: HoleDim[];
 }
 
-/** A drilled hole (or several), Inventor-style: placed on a flat face. */
+/** A drilled hole (or several), Inventor-style: placed on a flat face, or
+ *  (placement "radial") on a round face, aimed at its axis. */
 export interface HoleFeature {
   id: string;
   type: "hole";
-  /** The flat face it's drilled into. */
+  /** The face it's drilled into. */
   face: TopoRef;
-  /** Hole centres in the face's own plane coordinates (u right, v up). */
+  /** Absent = on a flat face. "radial" = on a round face (cylFrame.ts). */
+  placement?: "radial";
+  /** Hole centres in face coordinates: on a flat face its plane coords
+   *  (u right, v up); radial: x = mm along the axis, y = angle (deg). */
   centers: HoleCenter[];
   /** Expressions (mm). */
   diameter: string;
   depth: string;
-  /** Absent = blind hole of `depth` with a 118 degree drill point. */
-  extent?: "through";
+  /** Absent = blind hole of `depth` with a 118 degree drill point.
+   *  "toAxis" (radial only) = blind, down to the round face's axis. */
+  extent?: "through" | "toAxis";
   style: HoleStyle;
   cbDiameter?: string;
   cbDepth?: string;
@@ -242,7 +251,8 @@ function parseFeature(raw: unknown): FeatureData | null {
       style,
       suppressed: raw.suppressed === true,
     };
-    if (raw.extent === "through") hole.extent = "through";
+    if (raw.extent === "through" || raw.extent === "toAxis") hole.extent = raw.extent;
+    if (raw.placement === "radial") hole.placement = "radial";
     for (const key of ["cbDiameter", "cbDepth", "csDiameter", "csAngle"] as const) {
       const v = opt(raw[key]);
       if (v !== undefined) hole[key] = v;

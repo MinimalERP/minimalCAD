@@ -4,8 +4,10 @@ import { Circle } from "../entities/circle";
 import { revolveProfile } from "./kernel/revolve";
 import { meshVolume } from "./kernel/extrude";
 import type { Body } from "./kernel/types";
-import { faceFrameOf, rebuild } from "./rebuild";
-import { edgesOnFace } from "./faceTopology";
+import { faceHasRef } from "./kernel/types";
+import { faceFrameOf, faceSurfaceOf, rebuild } from "./rebuild";
+import { cylTo3d, isCyl } from "./cylFrame";
+import { edgesOnFace, refsOnRoundFace } from "./faceTopology";
 import { emptyPart, parsePart } from "./types";
 import { dependsOn, refLine, resolveCenters, signedDistance, solveCenter } from "./hole";
 import type { Point } from "../core/types";
@@ -319,5 +321,123 @@ describe("edgesOnFace (snaps belong to the face under the cursor)", () => {
     expect(onTop.lines).toHaveLength(4); // bottom-face and vertical edges excluded
     expect(onTop.circles).toEqual([{ center: { x: 50, y: -30 }, radius: 5 }]);
     expect(onTop.snaps.filter((s) => s.kind === "center")).toHaveLength(1);
+  });
+});
+
+describe("radial holes (on a round face)", () => {
+  /** Ø40 x 80 shaft standing on the XY plane, axis = world Z. */
+  function shaft(hole?: Omit<HoleFeature, "id" | "type" | "face" | "placement">): PartData {
+    const part = emptyPart();
+    part.features.push({ id: "Extrude001", type: "extrude", sketch: "Drawing", profiles: "all", distance: "80", direction: "normal", operation: "new" });
+    if (hole !== undefined) {
+      part.features.push({ id: "Hole001", type: "hole", placement: "radial", face: { feature: "Extrude001", role: "side", index: "0.0.0" }, ...hole });
+    }
+    return part;
+  }
+  const circle = (): Record<string, unknown> => new Circle({ x: 0, y: 0 }, 20).serialize();
+  const shaftVol = (): number => vol(rebuild(shaft(), [circle()]).bodies[0]!);
+
+  it("the shaft's side is a round face with a CylFrame (angle 0 = +X for a vertical axis)", () => {
+    const bodies = rebuild(shaft(), [circle()]).bodies;
+    const s = faceSurfaceOf(bodies, { feature: "Extrude001", role: "side", index: "0.0.0" });
+    expect(s !== null && isCyl(s)).toBe(true);
+    if (s === null || !isCyl(s)) return;
+    expect(s.radius).toBeCloseTo(20);
+    expect(s.ref.x).toBeCloseTo(1);
+    const p = cylTo3d(s, { x: 30, y: 90 });
+    expect([p.x, p.y, p.z].map((v) => +v.toFixed(6))).toEqual([0, 20, 30]);
+  });
+
+  it("references on the round face: both end rims, and the XZ / YZ plane lines (both sides)", () => {
+    const bodies = rebuild(shaft(), [circle()]).bodies;
+    const ref = { feature: "Extrude001", role: "side" as const, index: "0.0.0" };
+    const s = faceSurfaceOf(bodies, ref);
+    if (s === null || !isCyl(s)) throw new Error("no round face");
+    const refs = refsOnRoundFace(bodies[0]!, ref, s);
+    const rims = refs.filter((r) => r.label === "end face").map((r) => +r.seg[0].x.toFixed(6)).sort((a, b) => a - b);
+    expect(rims).toEqual([0, 80]);
+    const planes = refs.filter((r) => r.label.endsWith("plane")).map((r) => `${r.label} ${Math.round(r.seg[0].y)}`).sort();
+    expect(planes).toEqual(["XZ plane 0", "XZ plane 180", "YZ plane -90", "YZ plane 90"]);
+    expect(refs.some((r) => r.label === "flat")).toBe(false);
+  });
+
+  it("a key flat along the shaft is an angle reference (at its normal's angle), and picking that face finds it", () => {
+    const part = shaft();
+    const box = new Polyline(
+      [
+        { x: 15, y: -30 },
+        { x: 30, y: -30 },
+        { x: 30, y: 30 },
+        { x: 15, y: 30 },
+      ].map((point) => ({ point, bulge: 0 })),
+      true,
+    ).serialize();
+    part.sketches.push({ id: "Sketch001", plane: { base: "XY", offset: 0 }, entities: [box], constraints: [] });
+    part.features.push({ id: "Extrude002", type: "extrude", sketch: "Sketch001", profiles: "all", distance: "80", direction: "normal", operation: "cut" });
+    const r = rebuild(part, [circle()]);
+    expect(r.status.get("Extrude002")).toEqual({ ok: true });
+    const ref = { feature: "Extrude001", role: "side" as const, index: "0.0.0" };
+    const s = faceSurfaceOf(r.bodies, ref);
+    if (s === null || !isCyl(s)) throw new Error("no round face");
+    const refs = refsOnRoundFace(r.bodies[0]!, ref, s);
+    const flat = refs.find((x) => x.label === "flat");
+    expect(flat?.seg[0].y).toBeCloseTo(0); // the flat faces +X: angle 0
+    const flatFace = r.bodies[0]!.faces.find((f) => f.geom.kind === "plane" && Math.abs(f.geom.normal.x - 1) < 1e-9);
+    expect(flatFace !== undefined && flat?.flat !== undefined && faceHasRef(flatFace, flat.flat)).toBe(true);
+    // The two straight seams where the flat meets the round face are references too.
+    expect(refs.filter((x) => x.label === "edge")).toHaveLength(2);
+  });
+
+  it("through all: a Ø10 cross hole right across the shaft, watertight", () => {
+    const r = rebuild(shaft({ centers: [{ x: 40, y: 0 }], diameter: "10", depth: "5", extent: "through", style: "plain" }), [circle()]);
+    expect(r.status.get("Hole001")).toEqual({ ok: true });
+    const b = r.bodies[0]!;
+    expect(isWatertight(b)).toBe(true);
+    const removed = shaftVol() - vol(b);
+    // A Ø10 bore through a Ø40 shaft: a bit under the 2R-long cylinder.
+    expect(removed).toBeGreaterThan(Math.PI * 25 * 40 * 0.93);
+    expect(removed).toBeLessThan(Math.PI * 25 * 40);
+  });
+
+  it("to axis: stops at the centre line (plus the drill point)", () => {
+    const r = rebuild(shaft({ centers: [{ x: 40, y: 0 }], diameter: "10", depth: "5", extent: "toAxis", style: "plain" }), [circle()]);
+    expect(r.status.get("Hole001")).toEqual({ ok: true });
+    const b = r.bodies[0]!;
+    expect(isWatertight(b)).toBe(true);
+    const removed = shaftVol() - vol(b);
+    expect(removed).toBeGreaterThan(Math.PI * 25 * 20 * 0.9);
+    expect(removed).toBeLessThan(Math.PI * 25 * 20 * 1.2);
+    // Nothing on the far (-X) side is touched.
+    const xs = Array.from(b.mesh.positions).filter((_, i) => i % 3 === 0);
+    expect(Math.min(...xs)).toBeCloseTo(-20, 1);
+  });
+
+  it("constraints: 20 from the top end face + 90° from the angle-0 line -> the hole faces +Y at z 60", () => {
+    const centers: HoleCenter[] = [
+      {
+        x: 0,
+        y: 0,
+        dims: [
+          { ref: { kind: "edge", seg: [{ x: 80, y: 180 }, { x: 80, y: -180 }] }, d: "20", side: -1 },
+          { ref: { kind: "edge", seg: [{ x: 0, y: 0 }, { x: 80, y: 0 }] }, d: "90", side: 1 },
+        ],
+      },
+    ];
+    const solved = resolveCenters({ centers }, new Map());
+    expect(solved).toEqual([{ x: 60, y: 90 }]);
+    const r = rebuild(shaft({ centers, diameter: "10", depth: "8", style: "plain" }), [circle()]);
+    expect(r.status.get("Hole001")).toEqual({ ok: true });
+    const b = r.bodies[0]!;
+    // The blind hole's bottom rim: a circle of r5 centred 8 in from +Y at z 60.
+    const rim = b.edges.find((e) => e.geom.kind === "arc" && Math.abs(e.geom.radius - 5) < 1e-6);
+    expect(rim?.geom.kind === "arc" && [rim.geom.center.x, rim.geom.center.y, rim.geom.center.z].map((v) => +v.toFixed(4))).toEqual([0, 12, 60]);
+  });
+
+  it("too wide for the shaft, or To axis on a flat face, is refused", () => {
+    const wide = rebuild(shaft({ centers: [{ x: 40, y: 0 }], diameter: "40", depth: "5", extent: "through", style: "plain" }), [circle()]);
+    expect(wide.status.get("Hole001")?.error).toMatch(/too wide/);
+    const back = parsePart(JSON.parse(JSON.stringify(shaft({ centers: [{ x: 40, y: 0 }], diameter: "10", depth: "5", extent: "toAxis", style: "plain" }))))!;
+    const h = back.features[1] as HoleFeature;
+    expect([h.placement, h.extent]).toEqual(["radial", "toAxis"]);
   });
 });

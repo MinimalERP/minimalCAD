@@ -436,7 +436,7 @@ function holeSummary(f: HoleFeature, params: ReadonlyMap<string, number>): strin
     const n = e === undefined ? null : evalExpression(e, params);
     return n === null ? (e ?? "?") : `${+n.toFixed(3)}`;
   };
-  const depth = f.extent === "through" ? "thru" : `↧${v(f.depth)}`;
+  const depth = f.extent === "through" ? "thru" : f.extent === "toAxis" ? "to axis" : `↧${v(f.depth)}`;
   const count = f.centers.length > 1 ? ` ×${f.centers.length}` : "";
   const extra =
     f.style === "counterbore"
@@ -444,7 +444,7 @@ function holeSummary(f: HoleFeature, params: ReadonlyMap<string, number>): strin
       : f.style === "countersink"
         ? ` · c'sink Ø${v(f.csDiameter)} ${v(f.csAngle)}°`
         : "";
-  return `Ø${v(f.diameter)} ${depth}${count}${extra}`;
+  return `Ø${v(f.diameter)} ${depth}${f.placement === "radial" ? " radial" : ""}${count}${extra}`;
 }
 
 /** Short description of where a sketch lives. */

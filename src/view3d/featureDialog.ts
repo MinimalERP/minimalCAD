@@ -285,6 +285,7 @@ export const ICONS = {
   dirSym: svg('<line x1="3" y1="10" x2="17" y2="10"/><line x1="10" y1="2" x2="10" y2="18"/><path d="M7 5 L10 2 L13 5 M7 15 L10 18 L13 15"/>'),
   distance: svg('<line x1="3" y1="17" x2="17" y2="17"/><line x1="3" y1="7" x2="17" y2="7" stroke-dasharray="2 1.5"/><path d="M10 16 L10 8 M8 10 L10 8 L12 10"/>'),
   through: svg('<rect x="5" y="6" width="10" height="8"/><line x1="10" y1="1" x2="10" y2="19"/><path d="M8 17 L10 19 L12 17"/>'),
+  toAxis: svg('<circle cx="10" cy="11" r="7"/><line x1="2" y1="11" x2="18" y2="11" stroke-dasharray="1.5 1.5"/><path d="M8.5 1 V11 M11.5 1 V11"/>'),
   holeSimple: svg('<path d="M2 4 H7 V17 H13 V4 H18" /><line x1="10" y1="1" x2="10" y2="19" stroke-dasharray="1.5 1.5"/>'),
   holeCbore: svg('<path d="M1 4 H5 V9 H7 V17 H13 V9 H15 V4 H19"/><line x1="10" y1="1" x2="10" y2="19" stroke-dasharray="1.5 1.5"/>'),
   holeCsink: svg('<path d="M1 4 H4 L7 8 V17 H13 V8 L16 4 H19"/><line x1="10" y1="1" x2="10" y2="19" stroke-dasharray="1.5 1.5"/>'),

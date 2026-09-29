@@ -11,7 +11,10 @@ import { parseEntities } from "../core/document";
 import { extrudeRegions } from "./kernel/extrude";
 import { subtract, union } from "./kernel/csg";
 import { bodyBounds, bodyToPolygons, boundsOverlap, polygonsToBody } from "./kernel/brep";
-import type { Body } from "./kernel/types";
+import type { Body, TopoRef } from "./kernel/types";
+import type { Surface } from "./cylFrame";
+import { cylFrame, isCyl } from "./cylFrame";
+import { dot, length, scale, sub } from "./vec3";
 import { faceHasRef } from "./kernel/types";
 import { resolveParameters, evalExpression } from "./params";
 import { faceFrame, offsetFrame, planeFrame, toLocal, workPlaneFrame } from "./plane";
@@ -77,6 +80,37 @@ export function faceFrameOf(bodies: readonly Body[], ref: NonNullable<PlaneRef["
     if (face?.geom.kind === "plane") return faceFrame(face.geom.origin, face.geom.normal);
   }
   return null;
+}
+
+/** A hole's face among `bodies`: a flat face's Frame, or a round face's
+ *  CylFrame; null if it's gone. */
+export function faceSurfaceOf(bodies: readonly Body[], ref: TopoRef): Surface | null {
+  for (const body of bodies) {
+    const face = body.faces.find((f) => faceHasRef(f, ref));
+    if (face?.geom.kind === "plane") return faceFrame(face.geom.origin, face.geom.normal);
+    if (face?.geom.kind === "cylinder") return cylFrame(face.geom);
+  }
+  return null;
+}
+
+/** Through-all length for holes on `s`: from the face to just past the far
+ *  side of every solid (for a round face: across the axis and beyond). */
+export function surfaceThroughLength(bodies: readonly Body[], s: Surface): number {
+  if (!isCyl(s)) return throughLength(bodies, s);
+  let reach = 0;
+  for (const b of bodies) {
+    const { min, max } = bodyBounds(b);
+    for (const x of [min.x, max.x]) {
+      for (const y of [min.y, max.y]) {
+        for (const z of [min.z, max.z]) {
+          const d = sub({ x, y, z }, s.origin);
+          reach = Math.max(reach, length(sub(d, scale(s.axis, dot(d, s.axis)))));
+        }
+      }
+    }
+  }
+  const len = s.radius + reach;
+  return len + Math.max(1, len * 0.02);
 }
 
 /** Frame for a sketch's plane reference, or null if its work plane / face
@@ -218,10 +252,12 @@ export function applyOperation(bodies: Body[], tool: Body, operation: ExtrudeFea
 
 /** Drills a Hole feature into the bodies (in place). */
 function applyHole(feature: HoleFeature, bodies: Body[], params: ReadonlyMap<string, number>): FeatureStatus {
-  const frame = faceFrameOf(bodies, feature.face);
-  if (frame === null) return { ok: false, error: "The face this hole is on no longer exists" };
+  const surface = faceSurfaceOf(bodies, feature.face);
+  if (surface === null || isCyl(surface) !== (feature.placement === "radial")) {
+    return { ok: false, error: "The face this hole is on no longer exists" };
+  }
   if (feature.centers.length === 0) return { ok: false, error: "No hole centres" };
-  const tools = holeTools(feature, frame, params, throughLength(bodies, frame));
+  const tools = holeTools(feature, surface, params, surfaceThroughLength(bodies, surface));
   if (typeof tools === "string") return { ok: false, error: tools };
   let removedAny = false;
   for (const tool of tools) {

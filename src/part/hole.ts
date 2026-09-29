@@ -3,8 +3,10 @@
  * part/hole.ts
  *
  * Hole feature geometry: one revolved cutter per centre (kernel/revolve.ts),
- * drilled along the face's inward normal. The cutter starts slightly above
- * the face so the cut is clean.
+ * drilled along the face's inward normal -- or, on a round face (radial
+ * holes), straight at its axis. The cutter starts slightly above the face
+ * so the cut is clean (a round face never rises above the tangent plane at
+ * the hole centre, so the same start works there).
  *
  *   plain        |  |          counterbore   |    |        countersink  \    /
  *                |  |                        |_  _|                      \  /
@@ -16,6 +18,8 @@ import type { Point } from "../core/types";
 import type { Body } from "./kernel/types";
 import type { RZ } from "./kernel/revolve";
 import { revolveProfile } from "./kernel/revolve";
+import type { Surface } from "./cylFrame";
+import { cylTo3d, isCyl, radialDir } from "./cylFrame";
 import type { Frame } from "./plane";
 import { localTo3d } from "./plane";
 import { evalExpression } from "./params";
@@ -161,7 +165,7 @@ export function dependsOn(h: Pick<HoleFeature, "centers">, from: number, on: num
 /** One cutter body per centre, or an error message. */
 export function holeTools(
   h: HoleFeature,
-  frame: Frame,
+  frame: Surface,
   params: ReadonlyMap<string, number>,
   throughLen: number,
 ): Body[] | string {
@@ -169,15 +173,33 @@ export function holeTools(
   const d = ev(h.diameter);
   const depth = ev(h.depth);
   if (d === undefined || Number.isNaN(d)) return `Invalid diameter "${h.diameter}"`;
-  if (h.extent !== "through" && (depth === undefined || Number.isNaN(depth))) return `Invalid depth "${h.depth}"`;
+  const cyl = isCyl(frame) ? frame : null;
+  if (h.extent === "toAxis" && cyl === null) return "To axis is only for holes on a round face";
+  if (h.extent === undefined && (depth === undefined || Number.isNaN(depth))) return `Invalid depth "${h.depth}"`;
   const profile = holeProfile(
-    h,
-    { d, depth: depth ?? 0, cbD: ev(h.cbDiameter), cbDepth: ev(h.cbDepth), csD: ev(h.csDiameter), csAngle: ev(h.csAngle) },
+    { style: h.style, extent: h.extent === "through" ? "through" : undefined },
+    {
+      d,
+      depth: h.extent === "toAxis" ? cyl!.radius : (depth ?? 0),
+      cbD: ev(h.cbDiameter),
+      cbDepth: ev(h.cbDepth),
+      csD: ev(h.csDiameter),
+      csAngle: ev(h.csAngle),
+    },
     throughLen,
   );
   if (typeof profile === "string") return profile;
+  if (cyl !== null) {
+    const widest = Math.max(d, h.style === "counterbore" ? (ev(h.cbDiameter) ?? 0) : 0, h.style === "countersink" ? (ev(h.csDiameter) ?? 0) : 0);
+    if (widest >= 2 * cyl.radius) return `The hole is too wide for this round face (Ø${+(2 * cyl.radius).toFixed(3)})`;
+  }
   const centers = resolveCenters(h, params);
   if (typeof centers === "string") return centers;
-  const into = scale(frame.n, -1);
-  return centers.map((c: Point, i) => revolveProfile(h.id, `${i}`, profile, { origin: localTo3d(frame, c), dir: into }));
+  return centers.map((c: Point, i) => {
+    const axis =
+      cyl === null
+        ? { origin: localTo3d(frame as Frame, c), dir: scale((frame as Frame).n, -1) }
+        : { origin: cylTo3d(cyl, c), dir: scale(radialDir(cyl, c.y), -1) };
+    return revolveProfile(h.id, `${i}`, profile, axis);
+  });
 }

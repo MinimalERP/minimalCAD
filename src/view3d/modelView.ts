@@ -21,6 +21,8 @@ import { faceFrame, localTo3d, planeFrame } from "../part/plane";
 import { edgesOnFace } from "../part/faceTopology";
 import type { FaceSnap } from "../part/faceTopology";
 import { dot, sub } from "../part/vec3";
+import type { Surface } from "../part/cylFrame";
+import { cylFrame, cylFromWorld, surfaceSegment, surfaceTo3d } from "../part/cylFrame";
 import type { Region } from "../part/profile";
 import type { Point } from "../core/types";
 
@@ -68,8 +70,9 @@ export type Hit =
   /** A point on the active face (plane-local coords), possibly osnapped. */
   | { kind: "facePoint"; point: Point; snap: string | null }
   /** A point ON a flat face of a solid (whichever face is under the cursor),
-   *  in that face's coords, osnapped to the face's own edges/centres. */
-  | { kind: "surfacePoint"; ref: TopoRef; body: Body; faceId: number; frame: Frame; point: Point; raw: Point; snap: string | null };
+   *  in that face's coords, osnapped to the face's own edges/centres -- or
+   *  on the OUTSIDE of a round face, in its (along axis, angle) coords. */
+  | { kind: "surfacePoint"; ref: TopoRef; body: Body; faceId: number; frame: Surface; point: Point; raw: Point; snap: string | null };
 
 /** An osnap candidate on the active face, in its plane-local coords. */
 export interface SnapCandidate {
@@ -186,7 +189,7 @@ export class ModelView {
   /** On-model dimensions (e.g. hole positions): lines here, values as HTML labels. */
   private dimGroup = new THREE.Group();
   private dimLayer: HTMLDivElement;
-  private dimFrame: Frame | null = null;
+  private dimFrame: Surface | null = null;
   private dimLabels: { id: string; at: Point; el: HTMLDivElement }[] = [];
   /** The value box currently open on a dimension (survives re-draws). */
   private dimEdit: { id: string; input: HTMLInputElement; finish: (ok: boolean) => void } | null = null;
@@ -531,6 +534,23 @@ export class ModelView {
     return 1 / this.camera.zoom;
   }
 
+  /** Screen pixels per face unit along x and along y at face point `p` --
+   *  small on a face seen at a slant, so pick distances can be measured
+   *  on screen, where the user sees them. */
+  pxPerUnit(s: Surface, p: Point): Point {
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    const at = (q: Point): Point => {
+      const v = v3(surfaceTo3d(s, q)).project(this.camera);
+      return { x: ((v.x + 1) / 2) * w, y: ((1 - v.y) / 2) * h };
+    };
+    const o = at(p);
+    const step = 1e-3;
+    const ax = at({ x: p.x + step, y: p.y });
+    const ay = at({ x: p.x, y: p.y + step });
+    return { x: Math.hypot(ax.x - o.x, ax.y - o.y) / step, y: Math.hypot(ay.x - o.x, ay.y - o.y) / step };
+  }
+
   /** Highlighted segments on a face (picked / hovered edges), in yellow. */
   /**
    * On-model dimensions on a face: `segs` are the extension/dimension lines
@@ -538,7 +558,7 @@ export class ModelView {
    * Pass an empty list (or null frame) to clear.
    */
   setDimensions(
-    frame: Frame | null,
+    frame: Surface | null,
     dims: readonly { id: string; segs: [Point, Point][]; labelAt: Point; text: string; selected: boolean }[],
   ): void {
     disposeChildren(this.dimGroup);
@@ -552,7 +572,7 @@ export class ModelView {
     const hadFocus = this.dimEdit !== null && document.activeElement === this.dimEdit.input;
     for (const d of dims) {
       const lines = new THREE.LineSegments(
-        segmentsGeometry(d.segs.map(([a, b]) => [v3(localTo3d(frame, a)), v3(localTo3d(frame, b))])),
+        segmentsGeometry(d.segs.map(([a, b]) => surfaceSegment(frame, a, b).map(v3))),
         new THREE.LineBasicMaterial({ color: d.selected ? 0x4fc3ff : 0xffd400, depthTest: false }),
       );
       lines.renderOrder = 21;
@@ -643,14 +663,14 @@ export class ModelView {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
     for (const l of this.dimLabels) {
-      const s = v3(localTo3d(frame, l.at)).project(this.camera);
+      const s = v3(surfaceTo3d(frame, l.at)).project(this.camera);
       l.el.style.left = `${((s.x + 1) / 2) * w}px`;
       l.el.style.top = `${((1 - s.y) / 2) * h}px`;
     }
   }
 
-  setHighlightLines(frame: Frame | null, segments: readonly [Point, Point][]): void {
-    const old = this.markerGroup.children.filter((c) => c.userData.kind === "hl");
+  setHighlightLines(frame: Surface | null, segments: readonly [Point, Point][], kind: "hl" | "guide" = "hl"): void {
+    const old = this.markerGroup.children.filter((c) => c.userData.kind === kind);
     for (const o of old) {
       disposeChildren(o);
       this.markerGroup.remove(o);
@@ -658,10 +678,13 @@ export class ModelView {
     }
     if (frame !== null && segments.length > 0) {
       const lines = new THREE.LineSegments(
-        segmentsGeometry(segments.map(([a, b]) => [v3(localTo3d(frame, a)), v3(localTo3d(frame, b))])),
-        new THREE.LineBasicMaterial({ color: 0xffd400, depthTest: false }),
+        segmentsGeometry(segments.map(([a, b]) => surfaceSegment(frame, a, b).map(v3))),
+        // "guide": faint reference lines to measure from (e.g. plane traces on a round face).
+        new THREE.LineBasicMaterial(
+          kind === "hl" ? { color: 0xffd400, depthTest: false } : { color: 0x9fd3ff, depthTest: false, transparent: true, opacity: 0.55 },
+        ),
       );
-      lines.userData.kind = "hl";
+      lines.userData.kind = kind;
       lines.userData.screenPx = 1; // not rescaled meaningfully; lines have no size
       lines.renderOrder = 19;
       this.markerGroup.add(lines);
@@ -680,19 +703,19 @@ export class ModelView {
   /** Placed points (e.g. hole centres) + the live hover marker. */
   /** `colors[i]` overrides placed marker i's colour (e.g. green = locked hole). */
   setMarkers(
-    frame: Frame | null,
+    frame: Surface | null,
     placed: readonly Point[],
     hover: { point: Point; snap: string | null } | null,
     colors: readonly string[] = [],
   ): void {
-    for (const c of this.markerGroup.children.filter((o) => o.userData.kind !== "hl")) {
+    for (const c of this.markerGroup.children.filter((o) => o.userData.kind !== "hl" && o.userData.kind !== "guide")) {
       disposeChildren(c);
       this.markerGroup.remove(c);
     }
     if (frame !== null) {
-      placed.forEach((p, i) => this.markerGroup.add(markerSprite(v3(localTo3d(frame, p)), colors[i] ?? "#ff5a5a", "x")));
+      placed.forEach((p, i) => this.markerGroup.add(markerSprite(v3(surfaceTo3d(frame, p)), colors[i] ?? "#ff5a5a", "x")));
       if (hover !== null) {
-        this.markerGroup.add(markerSprite(v3(localTo3d(frame, hover.point)), hover.snap !== null ? "#ffd400" : "#ffffff", hover.snap !== null ? "box" : "x"));
+        this.markerGroup.add(markerSprite(v3(surfaceTo3d(frame, hover.point)), hover.snap !== null ? "#ffd400" : "#ffffff", hover.snap !== null ? "box" : "x"));
       }
     }
     this.requestRender();
@@ -770,7 +793,19 @@ export class ModelView {
       const body = h?.object.userData.body as Body | undefined;
       const faceId = h?.faceIndex == null || body === undefined ? undefined : body.mesh.faceIds[h.faceIndex];
       const face = faceId === undefined ? undefined : body!.faces[faceId];
-      if (h === undefined || body === undefined || face?.geom.kind !== "plane") return null;
+      if (h === undefined || body === undefined || face === undefined) return null;
+      if (face.geom.kind === "cylinder") {
+        // Round face: only its outside (radial holes), no osnaps.
+        const cyl = cylFrame(face.geom);
+        const p = { x: h.point.x, y: h.point.y, z: h.point.z };
+        const d = sub(p, cyl.origin);
+        const radial = sub(d, { x: cyl.axis.x * dot(d, cyl.axis), y: cyl.axis.y * dot(d, cyl.axis), z: cyl.axis.z * dot(d, cyl.axis) });
+        const n = h.face?.normal;
+        if (n === undefined || n.x * radial.x + n.y * radial.y + n.z * radial.z <= 0) return null; // inside of a bore
+        const raw = cylFromWorld(cyl, p);
+        return { kind: "surfacePoint", ref: face.ref, body, faceId: face.id, frame: cyl, point: raw, raw, snap: null };
+      }
+      if (face.geom.kind !== "plane") return null;
       const frame = faceFrame(face.geom.origin, face.geom.normal);
       // Osnap to this face's own edges, within SNAP_PX on screen.
       let best: { point: Point; kind: string } | null = null;
@@ -1016,7 +1051,7 @@ export class ModelView {
       this.ucsIcon.scale.setScalar(55 / this.camera.zoom);
       this.originGroup.scale.setScalar(95 / this.camera.zoom);
       for (const m of this.markerGroup.children) {
-        if (m.userData.kind !== "hl") m.scale.setScalar((m.userData.screenPx as number) / this.camera.zoom);
+        if (m.userData.kind !== "hl" && m.userData.kind !== "guide") m.scale.setScalar((m.userData.screenPx as number) / this.camera.zoom);
       }
       this.renderer.render(this.scene, this.camera);
       this.placeDimLabels();
