@@ -80,6 +80,19 @@ function splitPolygon(
   front: Polygon[],
   back: Polygon[],
 ): void {
+  // A polygon always lies ON its own plane (and on the exact opposite one).
+  // Measured per vertex, a sliver's shaky normal can make it "span" its own
+  // plane: it would be split by itself, the pieces (same plane) handed down
+  // to a child that picks that plane again -- forever, until memory runs out.
+  const pn = poly.normal;
+  if (pn.x === plane.normal.x && pn.y === plane.normal.y && pn.z === plane.normal.z && poly.w === plane.w) {
+    coplanarFront.push(poly);
+    return;
+  }
+  if (pn.x === -plane.normal.x && pn.y === -plane.normal.y && pn.z === -plane.normal.z && poly.w === -plane.w) {
+    coplanarBack.push(poly);
+    return;
+  }
   let polyType = 0;
   const types: number[] = [];
   for (const v of poly.vertices) {
@@ -237,33 +250,80 @@ function withEps<T>(a: readonly Polygon[], b: readonly Polygon[], fn: () => T): 
   }
 }
 
+/** Axis-aligned box of some polygons, grown by `pad`. */
+function boxOf(polys: readonly Polygon[], pad: number): { min: Vec3; max: Vec3 } {
+  const min = { x: Infinity, y: Infinity, z: Infinity };
+  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (const p of polys) {
+    for (const v of p.vertices) {
+      min.x = Math.min(min.x, v.x);
+      min.y = Math.min(min.y, v.y);
+      min.z = Math.min(min.z, v.z);
+      max.x = Math.max(max.x, v.x);
+      max.y = Math.max(max.y, v.y);
+      max.z = Math.max(max.z, v.z);
+    }
+  }
+  return { min: { x: min.x - pad, y: min.y - pad, z: min.z - pad }, max: { x: max.x + pad, y: max.y + pad, z: max.z + pad } };
+}
+
+/** Splits `polys` into those touching `box` and those clear of it. */
+function nearFar(polys: readonly Polygon[], box: { min: Vec3; max: Vec3 }): [Polygon[], Polygon[]] {
+  const near: Polygon[] = [];
+  const far: Polygon[] = [];
+  for (const p of polys) {
+    let lo = { x: Infinity, y: Infinity, z: Infinity };
+    let hi = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (const v of p.vertices) {
+      lo = { x: Math.min(lo.x, v.x), y: Math.min(lo.y, v.y), z: Math.min(lo.z, v.z) };
+      hi = { x: Math.max(hi.x, v.x), y: Math.max(hi.y, v.y), z: Math.max(hi.z, v.z) };
+    }
+    const clear =
+      hi.x < box.min.x || lo.x > box.max.x || hi.y < box.min.y || lo.y > box.max.y || hi.z < box.min.z || lo.z > box.max.z;
+    (clear ? far : near).push(p);
+  }
+  return [near, far];
+}
+
+/*
+ * union / subtract: the csg.js sequences, but each solid's ORIGINAL polygons
+ * are clipped through the other's tree (the trees only classify), instead
+ * of first being chopped up by their own tree and re-inserted -- and
+ * polygons clear of the other solid's box skip clipping entirely (they
+ * can't be inside it). Same result, far fewer fragments: a revolved ring
+ * against a part went from ~43k output polygons to a small fraction.
+ */
+
 export function union(a: Polygon[], b: Polygon[]): Polygon[] {
   return withEps(a, b, () => {
     const A = new BspNode(a);
     const B = new BspNode(b);
-    A.clipTo(B);
-    B.clipTo(A);
-    B.invert();
-    B.clipTo(A);
-    B.invert();
-    A.build(B.allPolygons());
-    return A.allPolygons();
+    const [aNear, aFar] = nearFar(a, boxOf(b, EPS * 10));
+    const [bNear, bFar] = nearFar(b, boxOf(a, EPS * 10));
+    // A.clipTo(B): A's parts inside B go.
+    const aOut = B.clipPolygons(aNear);
+    // B.clipTo(A); invert; clipTo(A); invert: B's parts inside A (and
+    // those coplanar with A's faces, facing the same way) go.
+    const bIn = A.clipPolygons(bNear);
+    const bOut = A.clipPolygons(bIn.map(flip)).map(flip);
+    return [...aOut, ...aFar, ...bOut, ...bFar];
   });
 }
 
 export function subtract(a: Polygon[], b: Polygon[]): Polygon[] {
   return withEps(a, b, () => {
-    const A = new BspNode(a);
+    const Ainv = new BspNode(a.map(flip));
     const B = new BspNode(b);
-    A.invert();
-    A.clipTo(B);
-    B.clipTo(A);
-    B.invert();
-    B.clipTo(A);
-    B.invert();
-    A.build(B.allPolygons());
-    A.invert();
-    return A.allPolygons();
+    const [aNear, aFar] = nearFar(a, boxOf(b, EPS * 10));
+    // A.invert(); A.clipTo(B): A's parts inside B go (A kept flipped).
+    const aOut = B.clipPolygons(aNear.map(flip));
+    // B.clipTo(A); invert; clipTo(A); invert -- A being inverted: only B's
+    // parts inside A survive (B clear of A's box is dropped: outside A).
+    const [bNear] = nearFar(b, boxOf(a, EPS * 10));
+    const b1 = Ainv.clipPolygons(bNear).map(flip);
+    const b2 = Ainv.clipPolygons(b1);
+    // A.build(B); A.invert(): everything flips back.
+    return [...aOut.map(flip), ...aFar, ...b2];
   });
 }
 

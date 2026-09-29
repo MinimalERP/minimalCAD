@@ -143,7 +143,37 @@ export interface HoleFeature {
   suppressed?: boolean;
 }
 
-export type FeatureData = ExtrudeFeature | HoleFeature;
+/** An edge, named the way that survives rebuilds: the two faces it runs
+ *  between (stable face refs), and a point near it -- in case those two
+ *  faces meet along more than one edge. */
+export interface EdgeRef {
+  faces: [TopoRef, TopoRef];
+  at: { x: number; y: number; z: number };
+}
+
+export type ChamferMode = "equal" | "two" | "angle";
+
+/** Fillet (round) or chamfer (bevel) on picked edges: straight edges
+ *  between two flat faces, or circle rims where a round face meets a flat
+ *  one. Outside edges lose material, inside edges gain it. */
+export interface EdgeFeature {
+  id: string;
+  type: "fillet" | "chamfer";
+  edges: EdgeRef[];
+  /** Fillet radius / chamfer distance (mm expression). */
+  size: string;
+  /** Chamfer only: equal distances, two distances, or distance + angle. */
+  mode?: ChamferMode;
+  /** Chamfer "two": the distance on the second face. */
+  size2?: string;
+  /** Chamfer "angle": degrees from the first face. */
+  angle?: string;
+  suppressed?: boolean;
+}
+
+export type FeatureData = ExtrudeFeature | HoleFeature | EdgeFeature;
+
+export const isEdgeFeature = (f: FeatureData): f is EdgeFeature => f.type === "fillet" || f.type === "chamfer";
 
 export const isExtrude = (f: FeatureData): f is ExtrudeFeature => f.type === "extrude";
 
@@ -233,8 +263,41 @@ function parseHoleCenter(raw: unknown): HoleCenter | null {
   return c;
 }
 
+function parseTopoRef(raw: unknown): TopoRef | null {
+  if (!isObject(raw) || typeof raw.feature !== "string" || typeof raw.index !== "string") return null;
+  if (raw.role !== "start" && raw.role !== "end" && raw.role !== "side") return null;
+  return { feature: raw.feature, role: raw.role, index: raw.index };
+}
+
+function parseEdgeRef(raw: unknown): EdgeRef | null {
+  if (!isObject(raw) || !Array.isArray(raw.faces) || !isObject(raw.at)) return null;
+  const a = parseTopoRef(raw.faces[0]);
+  const b = parseTopoRef(raw.faces[1]);
+  const { x, y, z } = raw.at;
+  if (a === null || b === null || typeof x !== "number" || typeof y !== "number" || typeof z !== "number") return null;
+  return { faces: [a, b], at: { x, y, z } };
+}
+
 function parseFeature(raw: unknown): FeatureData | null {
   if (!isObject(raw) || typeof raw.id !== "string") return null;
+  if ((raw.type === "fillet" || raw.type === "chamfer") && Array.isArray(raw.edges)) {
+    const str = (v: unknown): string | undefined => (typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined);
+    const f: EdgeFeature = {
+      id: raw.id,
+      type: raw.type,
+      edges: raw.edges.map(parseEdgeRef).filter((e): e is EdgeRef => e !== null),
+      size: str(raw.size) ?? "2",
+      suppressed: raw.suppressed === true,
+    };
+    if (raw.type === "chamfer") {
+      f.mode = raw.mode === "two" || raw.mode === "angle" ? raw.mode : "equal";
+      const size2 = str(raw.size2);
+      const angle = str(raw.angle);
+      if (size2 !== undefined) f.size2 = size2;
+      if (angle !== undefined) f.angle = angle;
+    }
+    return f;
+  }
   if (raw.type === "hole" && isObject(raw.face)) {
     const f = raw.face;
     if (typeof f.feature !== "string" || typeof f.index !== "string" || typeof f.role !== "string") return null;

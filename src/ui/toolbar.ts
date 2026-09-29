@@ -96,7 +96,7 @@ const SKETCH_GROUPS: readonly (readonly string[])[] = [
 ];
 
 /** 3D-workspace actions (handled by the lazily-loaded model module). */
-export type ModelAction = "newsketch" | "workplane" | "extrude" | "hole" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
+export type ModelAction = "newsketch" | "workplane" | "extrude" | "hole" | "fillet" | "chamfer" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
 
 /** What the toolbar needs from the workspace controller -- kept as a narrow
  *  interface so this module never imports any 3D code. */
@@ -182,6 +182,12 @@ export function buildToolbar(
   addUtilityButton(model, "extrude", "Extrude", () => host.modelAction("extrude"));
   addUtilityButton(model, "hole", "Hole (H) - click a face, place centres, set Ø / depth / c'bore / c'sink", () =>
     host.modelAction("hole"),
+  );
+  addUtilityButton(model, "fillet", "Fillet (F) - round off edges: click edges, or a face for all its edges", () =>
+    host.modelAction("fillet"),
+  );
+  addUtilityButton(model, "chamfer", "Chamfer (CH) - bevel edges: click edges, or a face for all its edges", () =>
+    host.modelAction("chamfer"),
   );
   model.appendChild(gap());
   addUtilityButton(model, "viewfront", "Front view", () => host.modelAction("viewfront"));

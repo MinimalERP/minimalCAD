@@ -411,6 +411,6 @@ describe("join / cut features in rebuild", () => {
 
     const legacy = parsePart({ features: [{ id: "E", type: "extrude", sketch: "Drawing", distance: 5 }] });
     expect((legacy?.features[0] as ExtrudeFeature).operation).toBe("new");
-    expect(legacy?.features[0]!.extent).toBeUndefined();
+    expect((legacy?.features[0] as ExtrudeFeature).extent).toBeUndefined();
   });
 });

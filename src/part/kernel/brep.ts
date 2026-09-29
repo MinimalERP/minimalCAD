@@ -19,6 +19,7 @@ import type { Body, Edge, Face, TopoRef } from "./types";
 import { sameRef } from "./types";
 import type { Polygon } from "./csg";
 import { makePolygon } from "./csg";
+import { triangulate } from "./triangulate";
 import type { Vec3 } from "../vec3";
 import { add, cross, dot, length, normalize, scale, sub } from "../vec3";
 
@@ -154,6 +155,11 @@ function surfaceKey(face: Face, tol: number): string | null {
   if (g.kind === "cone") {
     const a = normalize(g.axis);
     return `k:${r(a.x * 1e3)},${r(a.y * 1e3)},${r(a.z * 1e3)},${r(g.apex.x)},${r(g.apex.y)},${r(g.apex.z)},${r(g.halfAngle * 1e6)}`;
+  }
+  if (g.kind === "torus") {
+    let a = normalize(g.axis);
+    if (a.x < -1e-9 || (Math.abs(a.x) <= 1e-9 && (a.y < -1e-9 || (Math.abs(a.y) <= 1e-9 && a.z < 0)))) a = scale(a, -1);
+    return `t:${r(a.x * 1e3)},${r(a.y * 1e3)},${r(a.z * 1e3)},${r(g.center.x)},${r(g.center.y)},${r(g.center.z)},${r(g.major)},${r(g.minor)}`;
   }
   return null;
 }
@@ -293,6 +299,11 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
   }
   const faceOf = (p: { faceId: number }): number => newIndex.get(canonical.get(p.faceId)!)!;
 
+  // 2b. Booleans leave a face shattered into slivers; re-triangulate each
+  //     flat patch (same face, same plane) cleanly from its outline, so the
+  //     next boolean isn't fed ever more fragments.
+  polys = compactPlanarPatches(polys, pts, faceOf, tol);
+
   // 3. Render mesh (fan triangulation; per-face analytic normals).
   const positions: number[] = [];
   const normals: number[] = [];
@@ -311,6 +322,13 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
         const d = sub(v, g.axisOrigin);
         const radial = normalize(sub(d, scale(a, dot(d, a))));
         n = dot(radial, p.normal) >= 0 ? radial : scale(radial, -1);
+      } else if (g.kind === "torus") {
+        // From the tube circle's centre nearest this point.
+        const a = normalize(g.axis);
+        const d = sub(v, g.center);
+        const radial = normalize(sub(d, scale(a, dot(d, a))));
+        const out = normalize(sub(v, add(g.center, scale(radial, g.major))));
+        n = dot(out, p.normal) >= 0 ? out : scale(out, -1);
       }
       normals.push(n.x, n.y, n.z);
     }
@@ -345,6 +363,10 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
     const [fa, fb] = pair.split("|").map(Number) as [number, number];
     for (const chain of chainSegments(segs)) {
       const chainPts = chain.map((i) => pts[i]!);
+      // Faces meeting TANGENTIALLY (a fillet running into a face) make no
+      // edge: the surface is smooth there -- and the boundary between two
+      // near-coincident tessellations would only draw as a broken zig-zag.
+      if (fb >= 0 && tangentAlong(chainPts, outFaces[fa]!, outFaces[fb]!)) continue;
       edges.push(...classifyChain(chainPts, outFaces[fa]!, fb >= 0 ? outFaces[fb]! : undefined, tol, ref));
     }
   }
@@ -403,8 +425,261 @@ function chainSegments(segs: readonly [number, number][]): number[][] {
   return chains;
 }
 
-/** Exact radius of a circle on a cylinder/cone at `center` (on its axis). */
-function exactRimRadius(face: Face, center: Vec3): number | null {
+/**
+ * Re-triangulates every patch of polygons lying in one plane of one face
+ * from its boundary loops (outer CCW + holes CW about the normal). Every
+ * boundary vertex is kept -- neighbours share them, so the mesh stays
+ * watertight -- only interior vertices go. A patch whose outline can't be
+ * rebuilt exactly (area check) is left as it was.
+ */
+function compactPlanarPatches<P extends { idx: number[]; normal: Vec3; faceId: number }>(
+  polys: P[],
+  pts: readonly Vec3[],
+  faceOf: (p: P) => number,
+  tol: number,
+): P[] {
+  const groups = new Map<string, P[]>();
+  const rn = (v: number): number => Math.round(v * 1e6);
+  for (const p of polys) {
+    const n = p.normal;
+    const w = dot(n, pts[p.idx[0]!]!);
+    const key = `${faceOf(p)}|${rn(n.x)},${rn(n.y)},${rn(n.z)},${Math.round(w / (tol * 1e3))}`;
+    const g = groups.get(key);
+    if (g === undefined) groups.set(key, [p]);
+    else g.push(p);
+  }
+  const out: P[] = [];
+  for (const group of groups.values()) {
+    if (group.length < 3) {
+      out.push(...group);
+      continue;
+    }
+    const redone = retriangulate(group, pts);
+    out.push(...(redone ?? group));
+  }
+  return out;
+}
+
+function polygonArea3(idx: readonly number[], pts: readonly Vec3[], n: Vec3): number {
+  let a = 0;
+  const o = pts[idx[0]!]!;
+  for (let k = 1; k + 1 < idx.length; k++) {
+    a += dot(cross(sub(pts[idx[k]!]!, o), sub(pts[idx[k + 1]!]!, o)), n) / 2;
+  }
+  return a;
+}
+
+function retriangulate<P extends { idx: number[]; normal: Vec3; faceId: number }>(group: P[], pts: readonly Vec3[]): P[] | null {
+  const n = normalize(group[0]!.normal);
+  // Boundary = directed edges whose reverse isn't in the patch.
+  const directed = new Set<string>();
+  for (const p of group) for (let k = 0; k < p.idx.length; k++) directed.add(`${p.idx[k]}|${p.idx[(k + 1) % p.idx.length]}`);
+  const next = new Map<number, number[]>();
+  let boundaryCount = 0;
+  for (const p of group) {
+    for (let k = 0; k < p.idx.length; k++) {
+      const a = p.idx[k]!;
+      const b = p.idx[(k + 1) % p.idx.length]!;
+      if (a === b || directed.has(`${b}|${a}`)) continue;
+      const list = next.get(a);
+      if (list === undefined) next.set(a, [b]);
+      else list.push(b);
+      boundaryCount++;
+    }
+  }
+  // Pinched outlines (a vertex with two ways on) -- leave the patch alone.
+  for (const list of next.values()) if (list.length !== 1) return null;
+  const loops: number[][] = [];
+  const used = new Set<number>();
+  for (const start of next.keys()) {
+    if (used.has(start)) continue;
+    const loop: number[] = [];
+    let v = start;
+    while (!used.has(v)) {
+      used.add(v);
+      loop.push(v);
+      const nv = next.get(v)?.[0];
+      if (nv === undefined) return null;
+      v = nv;
+    }
+    if (v !== start || loop.length < 3) return null;
+    loops.push(loop);
+  }
+  if (loops.reduce((s, l) => s + l.length, 0) !== boundaryCount) return null;
+
+  // 2D in the patch plane.
+  const u = normalize(Math.abs(n.x) < 0.9 ? cross(n, { x: 1, y: 0, z: 0 }) : cross(n, { x: 0, y: 1, z: 0 }));
+  const v2 = cross(n, u);
+  const to2 = (i: number): [number, number] => [dot(pts[i]!, u), dot(pts[i]!, v2)];
+  const area2 = (loop: number[]): number => {
+    let a = 0;
+    for (let k = 0; k < loop.length; k++) {
+      const [x0, y0] = to2(loop[k]!);
+      const [x1, y1] = to2(loop[(k + 1) % loop.length]!);
+      a += x0 * y1 - x1 * y0;
+    }
+    return a / 2;
+  };
+  const outers = loops.filter((l) => area2(l) > 0);
+  const holes = loops.filter((l) => area2(l) < 0);
+  const inside = (p: [number, number], loop: number[]): boolean => {
+    let c = false;
+    for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+      const [xi, yi] = to2(loop[i]!);
+      const [xj, yj] = to2(loop[j]!);
+      if (yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  };
+  const expected = group.reduce((s, p) => s + polygonArea3(p.idx, pts, n), 0);
+  const tri: P[] = [];
+  let got = 0;
+  const holesOf = new Map<number[], number[][]>(outers.map((o) => [o, []]));
+  for (const h of holes) {
+    // The smallest outer containing the hole.
+    const probe = to2(h[0]!);
+    const host = outers.filter((o) => inside(probe, o)).sort((a, b) => area2(a) - area2(b))[0];
+    if (host === undefined) return null;
+    holesOf.get(host)!.push(h);
+  }
+  // Points lying on a straight run of the outline (inserted so neighbours
+  // match up) would make zero-area ears: triangulate without them, then put
+  // each back by fanning the triangle whose side it lies on.
+  const onSide = new Map<string, number[]>(); // simplified side "a|b" -> points between, in order
+  const simplify = (ring: number[]): number[] | null => {
+    const keep = ring.filter((i, k) => {
+      const [px, py] = to2(ring[(k + ring.length - 1) % ring.length]!);
+      const [x, y] = to2(i);
+      const [nx, ny] = to2(ring[(k + 1) % ring.length]!);
+      const cr = (x - px) * (ny - py) - (y - py) * (nx - px);
+      const len2 = (nx - px) ** 2 + (ny - py) ** 2;
+      return Math.abs(cr) > len2 * 1e-9;
+    });
+    if (keep.length < 3) return null;
+    // Record what was dropped between consecutive kept points.
+    const at = new Map(ring.map((i, k) => [i, k]));
+    for (let k = 0; k < keep.length; k++) {
+      const a = keep[k]!;
+      const b = keep[(k + 1) % keep.length]!;
+      const between: number[] = [];
+      for (let j = (at.get(a)! + 1) % ring.length; ring[j] !== b; j = (j + 1) % ring.length) between.push(ring[j]!);
+      if (between.length > 0) onSide.set(`${a}|${b}`, between);
+    }
+    return keep;
+  };
+  const fan = (a: number, b: number, c: number, out: number[][]): void => {
+    // Triangle (a, b, c): put back any dropped points on its sides.
+    for (const [p, q, r] of [[a, b, c], [b, c, a], [c, a, b]] as const) {
+      const pts2 = onSide.get(`${p}|${q}`);
+      if (pts2 === undefined) continue;
+      const chain = [p, ...pts2, q];
+      for (let k = 0; k + 1 < chain.length; k++) fan(chain[k]!, chain[k + 1]!, r, out);
+      onSide.delete(`${p}|${q}`); // (restored on the one side that has it)
+      return;
+    }
+    out.push([a, b, c]);
+  };
+  for (const outer of outers) {
+    const rings: number[][] = [];
+    for (const ring of [outer, ...holesOf.get(outer)!]) {
+      const simple = simplify(ring);
+      if (simple === null) return null;
+      rings.push(simple);
+    }
+    const flat: number[] = [];
+    const ids: number[] = [];
+    const holeIdx: number[] = [];
+    rings.forEach((ring, r) => {
+      if (r > 0) holeIdx.push(ids.length);
+      for (const i of ring) {
+        const [x, y] = to2(i);
+        flat.push(x, y);
+        ids.push(i);
+      }
+    });
+    const t = triangulate(flat, holeIdx);
+    const fanned: number[][] = [];
+    for (let k = 0; k + 2 < t.length; k += 3) fan(ids[t[k]!]!, ids[t[k + 1]!]!, ids[t[k + 2]!]!, fanned);
+    for (const idx of fanned) {
+      const a = polygonArea3(idx, pts, n);
+      if (!(a > 0)) return null; // a flipped or degenerate triangle: not a clean fill
+      got += a;
+      tri.push({ ...group[0]!, idx });
+    }
+  }
+  // Same area as before...
+  if (!(Math.abs(got - expected) <= Math.abs(expected) * 1e-6 + 1e-9)) return null;
+  // ...and exactly the same outline, every inner edge shared once each way
+  // (overlapping triangles can't pass this).
+  const count = new Map<string, number>();
+  for (const q of tri) {
+    for (let k = 0; k < 3; k++) {
+      const key = `${q.idx[k]}|${q.idx[(k + 1) % 3]}`;
+      count.set(key, (count.get(key) ?? 0) + 1);
+    }
+  }
+  let outline = 0;
+  for (const [key, c] of count) {
+    if (c !== 1) return null;
+    const [a, b] = key.split("|");
+    if (count.has(`${b}|${a}`)) continue;
+    const list = next.get(Number(a));
+    if (list === undefined || list[0] !== Number(b)) return null;
+    outline++;
+  }
+  if (outline !== boundaryCount) return null;
+  return tri;
+}
+
+/** Exact unit normal of a face's surface at a point on it (either sign), or
+ *  null for free-form faces. */
+function surfaceNormalAt(face: Face, p: Vec3): Vec3 | null {
+  const g = face.geom;
+  if (g.kind === "plane") return normalize(g.normal);
+  if (g.kind === "cylinder") {
+    const a = normalize(g.axis);
+    const d = sub(p, g.axisOrigin);
+    return normalize(sub(d, scale(a, dot(d, a))));
+  }
+  if (g.kind === "cone") {
+    const a = normalize(g.axis);
+    const d = sub(p, g.apex);
+    const radial = normalize(sub(d, scale(a, dot(d, a))));
+    // Square to the cone's slant line through p.
+    return normalize(sub(scale(radial, Math.cos(g.halfAngle)), scale(a, Math.sin(g.halfAngle))));
+  }
+  if (g.kind === "torus") {
+    const a = normalize(g.axis);
+    const d = sub(p, g.center);
+    const radial = normalize(sub(d, scale(a, dot(d, a))));
+    return normalize(sub(p, add(g.center, scale(radial, g.major))));
+  }
+  return null;
+}
+
+/** True if faces `fa` and `fb` are tangent (same surface direction) all
+ *  along the chain -- checked at its ends and middle. */
+function tangentAlong(pts: readonly Vec3[], fa: Face, fb: Face): boolean {
+  const COS = Math.cos((1.5 * Math.PI) / 180);
+  for (const p of [pts[0]!, pts[Math.floor(pts.length / 2)]!, pts[pts.length - 1]!]) {
+    const na = surfaceNormalAt(fa, p);
+    const nb = surfaceNormalAt(fb, p);
+    if (na === null || nb === null || Math.abs(dot(na, nb)) < COS) return false;
+  }
+  return true;
+}
+
+/** Exact radius of a circle on a cylinder/cone/torus at `center` (on its
+ *  axis); `measured` picks between a torus's two circles at that height. */
+function exactRimRadius(face: Face, center: Vec3, measured: number): number | null {
+  if (face.geom.kind === "torus") {
+    const g = face.geom;
+    const h = dot(sub(center, g.center), normalize(g.axis));
+    const w = g.minor * g.minor - h * h;
+    if (w < 0) return null;
+    const roots = [g.major - Math.sqrt(w), g.major + Math.sqrt(w)];
+    return Math.abs(roots[0]! - measured) < Math.abs(roots[1]! - measured) ? roots[0]! : roots[1]!;
+  }
   if (face.geom.kind === "cylinder") return face.geom.radius;
   if (face.geom.kind === "cone") {
     const t = dot(sub(center, face.geom.apex), normalize(face.geom.axis));
@@ -446,6 +721,7 @@ function mergeCircleArcs(edges: Edge[], tol: number): Edge[] {
 function revolutionAxis(face: Face): { point: Vec3; dir: Vec3 } | null {
   if (face.geom.kind === "cylinder") return { point: face.geom.axisOrigin, dir: normalize(face.geom.axis) };
   if (face.geom.kind === "cone") return { point: face.geom.apex, dir: normalize(face.geom.axis) };
+  if (face.geom.kind === "torus") return { point: face.geom.center, dir: normalize(face.geom.axis) };
   return null;
 }
 
@@ -481,7 +757,7 @@ function classifyChain(pts: Vec3[], fa: Face, fb: Face | undefined, tol: number,
       prevAngle = angle;
     }
     if (closed) sweep = Math.sign(sweep || 1) * 2 * Math.PI;
-    const exactR = exactRimRadius(fa, center) ?? (fb === undefined ? null : exactRimRadius(fb, center)) ?? radius;
+    const exactR = exactRimRadius(fa, center, radius) ?? (fb === undefined ? null : exactRimRadius(fb, center, radius)) ?? radius;
     return [{ ref: ref(), geom: { kind: "arc", center, normal: a, radius: exactR, start: add(center, scale(e1, exactR)), sweep } }];
   }
 

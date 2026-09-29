@@ -44,7 +44,14 @@ function basis(dir: Vec3): [Vec3, Vec3] {
  * e.g. a drill: (0,0) (R,0) (R,D) (0,D+tip). Orientation is fixed up
  * automatically, so either traversal direction works.
  */
-export function revolveProfile(feature: string, tag: string, profile: readonly RZ[], axis: Axis): Body {
+/** Profile segments [from, to) that form ONE face (e.g. a sampled arc -> one torus). */
+export interface FaceGroup {
+  from: number;
+  to: number;
+  geom: FaceGeom;
+}
+
+export function revolveProfile(feature: string, tag: string, profile: readonly RZ[], axis: Axis, groups: readonly FaceGroup[] = []): Body {
   const [e1, e2] = basis(axis.dir);
   const at = (p: RZ, t: number): Vec3 =>
     add(add(axis.origin, scale(axis.dir, p.z)), add(scale(e1, p.r * Math.cos(t)), scale(e2, p.r * Math.sin(t))));
@@ -85,8 +92,13 @@ export function revolveProfile(feature: string, tag: string, profile: readonly R
         halfAngle: Math.atan(Math.abs(dr / dz)),
       };
     }
-    const faceId = faces.length;
-    faces.push({ id: faceId, ref: ref(`${s}`), geom });
+    const group = groups.find((g) => s >= g.from && s < g.to);
+    let faceId: number;
+    if (group !== undefined && s > group.from) faceId = faces.find((f) => f.ref.index === `${tag}.${group.from}`)!.id;
+    else {
+      faceId = faces.length;
+      faces.push({ id: faceId, ref: ref(`${s}`), geom: group?.geom ?? geom });
+    }
 
     // Profile-plane normal of this segment (either side; orientation fixed later).
     const len = Math.hypot(dr, dz);
@@ -116,6 +128,7 @@ export function revolveProfile(feature: string, tag: string, profile: readonly R
   // Exact rim circles at every off-axis profile vertex.
   profile.forEach((p, i) => {
     if (p.r <= 0) return;
+    if (groups.some((g) => i > g.from && i < g.to)) return; // inside one face: no edge
     const center = add(axis.origin, scale(axis.dir, p.z));
     edges.push({ ref: ref(`v${i}`), geom: { kind: "arc", center, normal: axis.dir, radius: p.r, start: add(center, scale(e1, p.r)), sweep: 2 * Math.PI } });
   });

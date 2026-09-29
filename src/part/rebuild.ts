@@ -21,7 +21,9 @@ import { faceFrame, offsetFrame, planeFrame, toLocal, workPlaneFrame } from "./p
 import type { Frame } from "./plane";
 import { findProfiles, regionContains } from "./profile";
 import type { ProfileResult, Region } from "./profile";
-import type { ExtrudeFeature, HoleFeature, PartData, PlaneRef, SketchData } from "./types";
+import type { EdgeFeature, ExtrudeFeature, HoleFeature, PartData, PlaneRef, SketchData } from "./types";
+import { isEdgeFeature } from "./types";
+import { edgeTools } from "./edgeBlend";
 import { holeTools } from "./hole";
 import { DRAWING_SKETCH, FACE_PLANE, isBasePlane } from "./types";
 
@@ -266,6 +268,18 @@ function applyHole(feature: HoleFeature, bodies: Body[], params: ReadonlyMap<str
   return removedAny ? { ok: true } : { ok: false, error: "Hole misses the solid" };
 }
 
+/** Fillets / chamfers the picked edges (in place): every tool is built
+ *  from the model as it was, then outside edges are cut, inside ones added. */
+function applyEdgeFeature(feature: EdgeFeature, bodies: Body[], params: ReadonlyMap<string, number>): FeatureStatus {
+  const tools = edgeTools(feature, bodies, params);
+  if (typeof tools === "string") return { ok: false, error: tools };
+  for (const t of [...tools.filter((x) => x.cut), ...tools.filter((x) => !x.cut)]) {
+    const r = applyOperation(bodies, t.body, t.cut ? "cut" : "join");
+    if (!r.ok && t.cut) return { ok: false, error: "A fillet / chamfer missed the solid - is it bigger than the faces?" };
+  }
+  return { ok: true };
+}
+
 export function rebuild(part: PartData, drawingEntities: Record<string, unknown>[] = []): RebuildResult {
   const params = resolveParameters(part.parameters);
   const planes = resolveWorkPlanes(part, params);
@@ -294,6 +308,10 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
     }
     if (feature.type === "hole") {
       status.set(feature.id, applyHole(feature, bodies, params));
+      continue;
+    }
+    if (isEdgeFeature(feature)) {
+      status.set(feature.id, applyEdgeFeature(feature, bodies, params));
       continue;
     }
     const geo = resolveSketch(feature.sketch);

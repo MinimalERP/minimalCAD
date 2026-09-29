@@ -21,6 +21,7 @@ import { faceFrame, localTo3d, planeFrame } from "../part/plane";
 import { edgesOnFace } from "../part/faceTopology";
 import type { FaceSnap } from "../part/faceTopology";
 import { dot, sub } from "../part/vec3";
+import type { Vec3 } from "../part/vec3";
 import type { Surface } from "../part/cylFrame";
 import { cylFrame, cylFromWorld, surfaceSegment, surfaceTo3d } from "../part/cylFrame";
 import type { Region } from "../part/profile";
@@ -72,7 +73,10 @@ export type Hit =
   /** A point ON a flat face of a solid (whichever face is under the cursor),
    *  in that face's coords, osnapped to the face's own edges/centres -- or
    *  on the OUTSIDE of a round face, in its (along axis, angle) coords. */
-  | { kind: "surfacePoint"; ref: TopoRef; body: Body; faceId: number; frame: Surface; point: Point; raw: Point; snap: string | null };
+  | { kind: "surfacePoint"; ref: TopoRef; body: Body; faceId: number; frame: Surface; point: Point; raw: Point; snap: string | null }
+  /** Edge picking (Fillet / Chamfer): candidate edge `index` (visible, near
+   *  the cursor on screen). */
+  | { kind: "edge"; index: number };
 
 /** An osnap candidate on the active face, in its plane-local coords. */
 export interface SnapCandidate {
@@ -182,7 +186,10 @@ export class ModelView {
   private bodyMeshes: THREE.Mesh[] = [];
   private faceHighlight = new THREE.Group();
 
-  private pickMode: "none" | "plane" | "region" | "facePoint" | "surfacePoint" = "none";
+  private pickMode: "none" | "plane" | "region" | "facePoint" | "surfacePoint" | "edge" = "none";
+  /** Edge-pick candidates (world polylines). */
+  private edgeCandidates: Vec3[][] = [];
+  private edgeGroup = new THREE.Group();
   private faceFrame: Frame | null = null;
   private snapCandidates: SnapCandidate[] = [];
   private markerGroup = new THREE.Group();
@@ -262,6 +269,7 @@ export class ModelView {
     this.viewCube.onHome = () => this.setView("iso");
 
     this.scene.add(
+      this.edgeGroup,
       this.markerGroup,
       this.dimGroup,
       this.faceHighlight,
@@ -692,6 +700,72 @@ export class ModelView {
     this.requestRender();
   }
 
+  /** Edge picking (Fillet / Chamfer): the visible candidate edge nearest
+   *  the cursor on screen; elsewhere, the face under it (any kind). */
+  setEdgePickMode(edges: readonly Vec3[][]): void {
+    this.setPickMode("none");
+    this.pickMode = "edge";
+    this.edgeCandidates = edges.map((e) => e.slice());
+  }
+
+  /** Picked edges (blue) and hovered ones (yellow), drawn over the model. */
+  setEdgeHighlights(selected: readonly (readonly Vec3[])[], hover: readonly (readonly Vec3[])[]): void {
+    disposeChildren(this.edgeGroup);
+    const add = (lines: readonly (readonly Vec3[])[], color: number, order: number): void => {
+      if (lines.length === 0) return;
+      const seg = new THREE.LineSegments(segmentsGeometry(lines.map((l) => l.map(v3))), new THREE.LineBasicMaterial({ color, depthTest: false }));
+      seg.renderOrder = order;
+      this.edgeGroup.add(seg);
+    };
+    add(selected, 0x4fc3ff, 22);
+    add(hover, 0xffd400, 23);
+    this.requestRender();
+  }
+
+  /** Live hover feedback in edge mode. */
+  onEdgeHover: ((hit: Hit | null) => void) | null = null;
+
+  /** Nearest visible candidate edge within SNAP_PX of the cursor, or null. */
+  private pickEdge(e: PointerEvent, rect: DOMRect): number | null {
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const screen = (p: Vec3): { x: number; y: number; w: THREE.Vector3 } => {
+      const w = v3(p);
+      const s = w.clone().project(this.camera);
+      return { x: ((s.x + 1) / 2) * rect.width, y: ((1 - s.y) / 2) * rect.height, w };
+    };
+    const found: { i: number; d: number; at: THREE.Vector3 }[] = [];
+    this.edgeCandidates.forEach((line, i) => {
+      let best = Infinity;
+      let at: THREE.Vector3 | null = null;
+      for (let k = 0; k + 1 < line.length; k++) {
+        const a = screen(line[k]!);
+        const b = screen(line[k + 1]!);
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len2 = dx * dx + dy * dy;
+        const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((mx - a.x) * dx + (my - a.y) * dy) / len2));
+        const d = Math.hypot(mx - (a.x + t * dx), my - (a.y + t * dy));
+        if (d < best) {
+          best = d;
+          at = a.w.clone().lerp(b.w, t);
+        }
+      }
+      if (best <= SNAP_PX && at !== null) found.push({ i, d: best, at });
+    });
+    found.sort((p, q) => p.d - q.d);
+    // Visible only: nothing of the model in front of the edge there.
+    const size = this.pixelSize();
+    for (const f of found) {
+      const s = f.at.clone().project(this.camera);
+      this.raycaster.setFromCamera(new THREE.Vector2(s.x, s.y), this.camera);
+      const first = this.raycaster.intersectObjects(this.bodyMeshes, false)[0];
+      const edgeDist = this.raycaster.ray.origin.distanceTo(f.at);
+      if (first === undefined || first.distance >= edgeDist - size * 3) return f.i;
+    }
+    return null;
+  }
+
   /** Click-on-any-flat-face picking (Hole): the face under the cursor and
    *  the point on it, snapped to that face's own edge ends / midpoints /
    *  circle centres. */
@@ -723,6 +797,8 @@ export class ModelView {
 
   setPickMode(mode: "none" | "plane" | "region", regions: readonly PickableRegion[] = []): void {
     this.faceFrame = null;
+    this.edgeCandidates = [];
+    disposeChildren(this.edgeGroup);
     this.snapCandidates = [];
     disposeChildren(this.markerGroup);
     this.pickMode = mode;
@@ -787,6 +863,16 @@ export class ModelView {
       const hit = ray.origin.clone().addScaledVector(ray.direction, t);
       const d = sub({ x: hit.x, y: hit.y, z: hit.z }, frame.origin);
       return { kind: "facePoint", point: { x: dot(d, frame.u), y: dot(d, frame.v) }, snap: null };
+    }
+    if (this.pickMode === "edge") {
+      const edge = this.pickEdge(e, rect);
+      if (edge !== null) return { kind: "edge", index: edge };
+      this.raycaster.setFromCamera(ndc, this.camera);
+      const h = this.raycaster.intersectObjects(this.bodyMeshes, false)[0];
+      const body = h?.object.userData.body as Body | undefined;
+      const faceId = h?.faceIndex == null || body === undefined ? undefined : body.mesh.faceIds[h.faceIndex];
+      const face = faceId === undefined ? undefined : body!.faces[faceId];
+      return face === undefined ? null : { kind: "face", ref: face.ref, body: body!, faceId: face.id };
     }
     if (this.pickMode === "surfacePoint") {
       const h = this.raycaster.intersectObjects(this.bodyMeshes, false)[0];
@@ -874,6 +960,14 @@ export class ModelView {
 
   private onHover(e: PointerEvent): void {
     if (this.pickMode === "none" || this.downPos !== null) return;
+    if (this.pickMode === "edge") {
+      const hit = this.pick(e);
+      this.highlightFace(hit?.kind === "face" ? hit : null);
+      this.canvas.style.cursor = hit === null ? "" : "pointer";
+      this.onEdgeHover?.(hit);
+      this.requestRender();
+      return;
+    }
     if (this.pickMode === "surfacePoint") {
       const hit = this.pick(e);
       const s = hit?.kind === "surfacePoint" ? hit : null;

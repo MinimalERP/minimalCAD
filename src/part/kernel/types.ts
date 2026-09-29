@@ -29,6 +29,10 @@ export type FaceGeom =
   | { kind: "cylinder"; axisOrigin: Vec3; axis: Vec3; radius: number }
   /** Right circular cone: radius grows by tan(halfAngle) per unit along `axis` from `apex`. */
   | { kind: "cone"; apex: Vec3; axis: Vec3; halfAngle: number }
+  /** Torus (a revolved circular arc, e.g. a fillet round a rim): the tube
+   *  circle's centre runs on a circle of radius `major` about `axis`
+   *  through `center`; `minor` = tube radius. */
+  | { kind: "torus"; center: Vec3; axis: Vec3; major: number; minor: number }
   | { kind: "freeform" };
 
 export interface Face {

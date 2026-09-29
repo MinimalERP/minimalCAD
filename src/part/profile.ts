@@ -237,6 +237,12 @@ function orient(loop: Loop, ccw: boolean): Loop {
   return loop.area > 0 === ccw ? loop : reverseLoop(loop);
 }
 
+/** A one-loop region from a closed chain of segments (any orientation). */
+export function regionFromSegments(segments: Segment[]): Region {
+  const outer = orient(buildLoop(segments), true);
+  return { outer, holes: [], area: outer.area };
+}
+
 export function pointInPolygon(p: Point, poly: readonly Point[]): boolean {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {

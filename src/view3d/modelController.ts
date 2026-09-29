@@ -26,7 +26,7 @@ import { parseEntities } from "../core/document";
 import type { Point } from "../core/types";
 import type { Entity } from "../entities/entity";
 import type { HoleFeature, PartData, PlaneRef } from "../part/types";
-import { DRAWING_SKETCH, emptyPart, isExtrude, nextId, parsePart } from "../part/types";
+import { DRAWING_SKETCH, emptyPart, isEdgeFeature, isExtrude, nextId, parsePart } from "../part/types";
 import { rebuild, resolvePlane } from "../part/rebuild";
 import type { RebuildResult } from "../part/rebuild";
 import { projectBodies } from "../part/project";
@@ -38,6 +38,7 @@ import { ModelView } from "./modelView";
 import type { ModelCommand, ModelContext } from "./commands/context";
 import { ExtrudeCommand } from "./commands/extrudeCommand";
 import { HoleCommand } from "./commands/holeCommand";
+import { EdgeBlendCommand } from "./commands/edgeBlendCommand";
 import { WorkPlaneCommand, planeAxes } from "./commands/workPlaneCommand";
 
 export interface ModelHost {
@@ -211,6 +212,9 @@ export class ModelController {
         return this.run(() => ExtrudeCommand.start(this.ctx, null));
       case "hole":
         return this.run(() => HoleCommand.start(this.ctx, null));
+      case "fillet":
+      case "chamfer":
+        return this.run(() => EdgeBlendCommand.start(this.ctx, action, null));
       case "viewfront":
         return this.view.setView("front");
       case "viewtop":
@@ -251,9 +255,11 @@ export class ModelController {
     }
     if (["e", "ext", "extrude"].includes(t)) this.action("extrude");
     else if (["h", "hole"].includes(t)) this.action("hole");
+    else if (["f", "fillet"].includes(t)) this.action("fillet");
+    else if (["ch", "cha", "chamfer"].includes(t)) this.action("chamfer");
     else if (["s", "sk", "sketch"].includes(t)) this.action("newsketch");
     else if (["wp", "plane", "workplane", "ucs"].includes(t)) this.action("workplane");
-    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), H (hole), S (sketch), WP`);
+    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), H (hole), F (fillet), CH (chamfer), S (sketch), WP`);
   }
 
   escape(): void {
@@ -313,6 +319,7 @@ export class ModelController {
     const f = this.part().features.find((x) => x.id === id);
     if (f === undefined) return;
     if (f.type === "hole") this.run(() => HoleCommand.start(this.ctx, f));
+    else if (isEdgeFeature(f)) this.run(() => EdgeBlendCommand.start(this.ctx, f.type, f));
     else this.run(() => ExtrudeCommand.start(this.ctx, f));
   }
 
@@ -418,6 +425,14 @@ export class ModelController {
       const error = st?.ok === false ? st.error : undefined;
       if (f.type === "hole") {
         row(f.id, f.id, holeSummary(f, this.params()), "◉", () => this.editFeature(f.id), { error });
+        continue;
+      }
+      if (isEdgeFeature(f)) {
+        const v = evalExpression(f.size, this.params());
+        const size = v === null ? f.size : `${+v.toFixed(3)}`;
+        const what = f.type === "fillet" ? `R${size}` : f.mode === "two" ? `${size} × ${f.size2 ?? "?"}` : f.mode === "angle" ? `${size} × ${f.angle ?? "?"}°` : `${size}`;
+        const n = f.edges.length;
+        row(f.id, f.id, `${what} · ${n} edge${n === 1 ? "" : "s"}`, f.type === "fillet" ? "◜" : "◸", () => this.editFeature(f.id), { error });
         continue;
       }
       sketchRow(f.sketch);
