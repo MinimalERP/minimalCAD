@@ -89,7 +89,7 @@ abstract class RadialDimensionCommandBase extends BaseCommand {
       this.targetCurve.drawSelected(ctx, this.engine.viewport);
     }
     if (this.state === 1 && this.targetCurve !== null && this.currentMousePos !== null) {
-      const preview = new Dimension(this.dimType(), this.buildData(this.currentMousePos));
+      const preview = new Dimension(this.dimType(), this.engine.styleDimension(this.buildData(this.currentMousePos)));
       preview.draw(ctx, this.engine.viewport, true);
     }
   }
@@ -109,7 +109,7 @@ abstract class RadialDimensionCommandBase extends BaseCommand {
 
   private executeGeneration(): void {
     this.undo.push(this.document.toDict());
-    const dim = new Dimension(this.dimType(), this.buildData(this.currentMousePos!));
+    const dim = new Dimension(this.dimType(), this.engine.styleDimension(this.buildData(this.currentMousePos!)));
     this.document.addEntity(dim);
     this.start();
   }

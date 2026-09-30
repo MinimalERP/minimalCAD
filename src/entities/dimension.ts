@@ -42,6 +42,11 @@ const COLOR_NORMAL = "#ffffff";
 type DimValue = Point | number | string;
 export type DimData = Record<string, DimValue>;
 
+/** "12.500" -> "12.5", "25.000" -> "25" (only after a decimal point). */
+function trimZeros(s: string): string {
+  return s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s;
+}
+
 function isPoint(v: DimValue | undefined): v is Point {
   return typeof v === "object" && v !== null && "x" in v && "y" in v;
 }
@@ -124,13 +129,20 @@ export class Dimension implements Entity {
     return typeof v === "number" ? v : fallback;
   }
 
+  /** A value as dimension text: `precision` = fixed decimals (0-4, like
+   *  AutoCAD's DIMDEC); else `trim_zeros` = up to 3 decimals without
+   *  trailing zeros (25, 12.5, 7.25); else the classic 2 decimals. */
+  private fmt(v: number): string {
+    const prec = this.data.precision;
+    if (typeof prec === "number") return v.toFixed(Math.max(0, Math.min(4, Math.round(prec))));
+    if (this.num("trim_zeros", 0) === 1) return trimZeros(v.toFixed(3));
+    return v.toFixed(2);
+  }
+
   /** A measured length as text. On a drawing sheet the dimension carries
-   *  `measure_scale` (1 / the view scale: paper mm -> part mm) and
-   *  `trim_zeros` (25 rather than 25.00). */
+   *  `measure_scale` (1 / the view scale: paper mm -> part mm). */
   private len(paper: number): string {
-    const v = paper * this.num("measure_scale", 1);
-    if (this.num("trim_zeros", 0) !== 1) return v.toFixed(2);
-    return v.toFixed(2).replace(/.?0+$/, "");
+    return this.fmt(paper * this.num("measure_scale", 1));
   }
 
   private str(key: string): string | undefined {
@@ -282,109 +294,115 @@ export class Dimension implements Entity {
 
   // --- Per-type draw methods ---
 
-  private drawLinear(ctx: CanvasRenderingContext2D, viewport: Viewport): void {
+  /** Linear dims measure along X or Y -- whichever way the dimension line
+   *  was pulled out; once the text has been moved by hand the direction is
+   *  pinned (\`orient\`), so sliding the text along never flips it. */
+  private linearHorizontal(): boolean {
+    const o = this.str("orient");
+    if (o === "h") return true;
+    if (o === "v") return false;
     const p1 = this.p("p1");
     const p2 = this.p("p2");
     const tp = this.p("text_position");
     const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-    const horizontal = Math.abs(tp.y - mid.y) >= Math.abs(tp.x - mid.x);
+    return Math.abs(tp.y - mid.y) >= Math.abs(tp.x - mid.x);
+  }
 
-    const extGap = EXTENSION_GAP * this.scale;
-    const arrow = ARROW_SIZE * this.scale;
-
-    if (horizontal) {
-      const val = Math.abs(p2.x - p1.x);
-      const txt = this.str("text_override") || this.len(val);
-      this.lastText = txt;
-      const dimY = tp.y;
-
-      const ext1Start = { x: p1.x, y: p1.y + (dimY > p1.y ? extGap : -extGap) };
-      const ext1End = { x: p1.x, y: dimY + (dimY > p1.y ? arrow : -arrow) };
-      const ext2Start = { x: p2.x, y: p2.y + (dimY > p2.y ? extGap : -extGap) };
-      const ext2End = { x: p2.x, y: dimY + (dimY > p2.y ? arrow : -arrow) };
-      this.line(ctx, viewport, ext1Start, ext1End);
-      this.line(ctx, viewport, ext2Start, ext2End);
-
-      const centerX = (p1.x + p2.x) / 2;
-      const textRect = this.textRectFor({ x: centerX, y: dimY }, txt);
-      this.lineWithGap(ctx, viewport, { x: p1.x, y: dimY }, { x: p2.x, y: dimY }, textRect);
-
-      if (p2.x >= p1.x) {
-        this.arrowhead(ctx, viewport, { x: p1.x, y: dimY }, 180.0);
-        this.arrowhead(ctx, viewport, { x: p2.x, y: dimY }, 0.0);
-      } else {
-        this.arrowhead(ctx, viewport, { x: p1.x, y: dimY }, 0.0);
-        this.arrowhead(ctx, viewport, { x: p2.x, y: dimY }, 180.0);
-      }
-      this.centeredText(ctx, viewport, { x: centerX, y: dimY }, txt);
-    } else {
-      const val = Math.abs(p2.y - p1.y);
-      const txt = this.str("text_override") || this.len(val);
-      this.lastText = txt;
-      const dimX = tp.x;
-
-      const ext1Start = { x: p1.x + (dimX > p1.x ? extGap : -extGap), y: p1.y };
-      const ext1End = { x: dimX + (dimX > p1.x ? arrow : -arrow), y: p1.y };
-      const ext2Start = { x: p2.x + (dimX > p2.x ? extGap : -extGap), y: p2.y };
-      const ext2End = { x: dimX + (dimX > p2.x ? arrow : -arrow), y: p2.y };
-      this.line(ctx, viewport, ext1Start, ext1End);
-      this.line(ctx, viewport, ext2Start, ext2End);
-
-      const centerY = (p1.y + p2.y) / 2;
-      const textRect = this.textRectFor({ x: dimX, y: centerY }, txt);
-      this.lineWithGap(ctx, viewport, { x: dimX, y: p1.y }, { x: dimX, y: p2.y }, textRect);
-
-      if (p2.y >= p1.y) {
-        this.arrowhead(ctx, viewport, { x: dimX, y: p1.y }, 270.0);
-        this.arrowhead(ctx, viewport, { x: dimX, y: p2.y }, 90.0);
-      } else {
-        this.arrowhead(ctx, viewport, { x: dimX, y: p1.y }, 90.0);
-        this.arrowhead(ctx, viewport, { x: dimX, y: p2.y }, 270.0);
-      }
-      this.centeredText(ctx, viewport, { x: dimX, y: centerY }, txt);
-    }
+  private drawLinear(ctx: CanvasRenderingContext2D, viewport: Viewport): void {
+    const u = this.linearHorizontal() ? { x: 1, y: 0 } : { x: 0, y: 1 };
+    this.drawAlongLine(ctx, viewport, this.p("p1"), this.p("p2"), this.p("text_position"), u);
   }
 
   private drawAligned(ctx: CanvasRenderingContext2D, viewport: Viewport): void {
     const p1 = this.p("p1");
     const p2 = this.p("p2");
-    const tp = this.p("text_position");
-
     const val = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    const txt = this.str("text_override") || this.len(val);
+    if (val === 0) {
+      this.lastText = this.str("text_override") || this.len(0);
+      return;
+    }
+    const u = { x: (p2.x - p1.x) / val, y: (p2.y - p1.y) / val };
+    this.drawAlongLine(ctx, viewport, p1, p2, this.p("text_position"), u);
+  }
+
+  /** Where the text of a linear / aligned dimension was last drawn (its
+   *  grip sits there, so dragging it moves the text). */
+  private textAt: Point | null = null;
+
+  /**
+   * Linear and aligned: extension lines from p1 / p2 to a dimension line
+   * through text_position, measuring along \`u\`.
+   *
+   * The text sits in the middle -- or, once dragged (\`text_moved\`), where
+   * it was dragged along the line, even outside the extension lines (the
+   * dimension line then runs out to it). When the text or the arrows don't
+   * fit between the extension lines (a small dimension) the text goes
+   * outside past the second one and the arrows flip outside, pointing in,
+   * like AutoCAD.
+   */
+  private drawAlongLine(ctx: CanvasRenderingContext2D, viewport: Viewport, p1: Point, p2: Point, tp: Point, u: Point): void {
+    const n = { x: -u.y, y: u.x };
+    const dotp = (a: Point, b: Point): number => a.x * b.x + a.y * b.y;
+    const off1 = dotp({ x: tp.x - p1.x, y: tp.y - p1.y }, n);
+    const off2 = dotp({ x: tp.x - p2.x, y: tp.y - p2.y }, n);
+    const d1 = { x: p1.x + n.x * off1, y: p1.y + n.y * off1 };
+    const d2 = { x: p2.x + n.x * off2, y: p2.y + n.y * off2 };
+    // Run d1 -> d2 along +e.
+    let e = u;
+    let L = dotp({ x: d2.x - d1.x, y: d2.y - d1.y }, u);
+    if (L < 0) {
+      e = { x: -u.x, y: -u.y };
+      L = -L;
+    }
+    const txt = this.str("text_override") || this.len(L);
     this.lastText = txt;
-    if (val === 0) return;
-
-    const dx = p2.x - p1.x;
-    const dy = p2.y - p1.y;
-    const nx = -dy / val;
-    const ny = dx / val;
-
-    const vtp = { x: tp.x - p1.x, y: tp.y - p1.y };
-    const dist = vtp.x * nx + vtp.y * ny;
-    const sign = dist >= 0 ? 1.0 : -1.0;
-
-    const d1 = { x: p1.x + nx * dist, y: p1.y + ny * dist };
-    const d2 = { x: p2.x + nx * dist, y: p2.y + ny * dist };
 
     const extGap = EXTENSION_GAP * this.scale;
     const arrow = ARROW_SIZE * this.scale;
-    const e1Start = { x: p1.x + nx * sign * extGap, y: p1.y + ny * sign * extGap };
-    const e1End = { x: d1.x + nx * sign * arrow, y: d1.y + ny * sign * arrow };
-    const e2Start = { x: p2.x + nx * sign * extGap, y: p2.y + ny * sign * extGap };
-    const e2End = { x: d2.x + nx * sign * arrow, y: d2.y + ny * sign * arrow };
-    this.line(ctx, viewport, e1Start, e1End);
-    this.line(ctx, viewport, e2Start, e2End);
+    for (const [p, d, off] of [
+      [p1, d1, off1],
+      [p2, d2, off2],
+    ] as const) {
+      const sgn = off >= 0 ? 1 : -1;
+      if (Math.abs(off) <= extGap) continue; // measured right on the dimension line
+      this.line(ctx, viewport, { x: p.x + n.x * sgn * extGap, y: p.y + n.y * sgn * extGap }, { x: d.x + n.x * sgn * arrow, y: d.y + n.y * sgn * arrow });
+    }
 
-    const centerPt = { x: (d1.x + d2.x) / 2, y: (d1.y + d2.y) / 2 };
-    const textRect = this.textRectFor(centerPt, txt);
-    this.lineWithGap(ctx, viewport, d1, d2, textRect);
+    const tw = measureText(txt, TEXT_HEIGHT * this.scale).width + TEXT_GAP * this.scale * 2.0;
+    const fitsText = L >= tw + arrow * 2.5;
+    let s: number; // text centre, along e from d1
+    if (this.num("text_moved", 0) === 1) s = dotp({ x: tp.x - d1.x, y: tp.y - d1.y }, e);
+    else s = fitsText ? L / 2 : L + arrow * 2 + tw / 2;
+    const textInside = s - tw / 2 >= 0 && s + tw / 2 <= L;
+    const arrowsInside = L >= arrow * 3 + (textInside ? tw : 0);
+    const at = (t: number): Point => ({ x: d1.x + e.x * t, y: d1.y + e.y * t });
 
-    const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
-    this.arrowhead(ctx, viewport, d1, ang + 180.0);
-    this.arrowhead(ctx, viewport, d2, ang);
+    const center = at(s);
+    const textRect = this.textRectFor(center, txt);
+    let from = arrowsInside ? 0 : -arrow * 2;
+    let to = arrowsInside ? L : L + arrow * 2;
+    from = Math.min(from, s - tw / 2);
+    to = Math.max(to, s + tw / 2);
+    this.lineWithGap(ctx, viewport, at(from), at(to), textRect);
 
-    this.centeredText(ctx, viewport, centerPt, txt);
+    const ang = (Math.atan2(e.y, e.x) * 180) / Math.PI;
+    if (arrowsInside) {
+      this.arrowhead(ctx, viewport, d1, ang + 180.0);
+      this.arrowhead(ctx, viewport, d2, ang);
+    } else {
+      this.arrowhead(ctx, viewport, d1, ang);
+      this.arrowhead(ctx, viewport, d2, ang + 180.0);
+    }
+    this.centeredText(ctx, viewport, center, txt);
+    this.textAt = center;
+  }
+
+  /** Called when the text grip is dragged: the text now stays where it's
+   *  put (and a linear dim keeps measuring the way it did). */
+  pinText(): void {
+    if (this.dimType !== "linear" && this.dimType !== "aligned") return;
+    if (this.dimType === "linear" && this.str("orient") === undefined) this.data.orient = this.linearHorizontal() ? "h" : "v";
+    this.data.text_moved = 1;
   }
 
   private drawAngular(ctx: CanvasRenderingContext2D, viewport: Viewport): void {
@@ -414,7 +432,7 @@ export class Dimension implements Entity {
     a2 = a1 + sweep;
 
     const degVal = (sweep * 180) / Math.PI;
-    const txt = this.str("text_override") || `${degVal.toFixed(2)}°`;
+    const txt = this.str("text_override") || `${this.fmt(degVal)}°`;
     this.lastText = txt;
 
     const midAng = a1 + sweep / 2.0;
@@ -545,7 +563,11 @@ export class Dimension implements Entity {
   }
 
   getBounds(): Bounds {
-    const points = this.getGripPoints();
+    // Grips plus everything last drawn: text or arrows placed outside the
+    // extension lines count (zoom extents, window selection).
+    const points = [...this.getGripPoints()];
+    for (const s of this.cachedSegments) points.push(s.p1, s.p2);
+    for (const [x0, y0, x1, y1] of this.cachedRects) points.push({ x: x0, y: y0 }, { x: x1, y: y1 });
     if (points.length === 0) return [0, 0, 0, 0];
     const xs = points.map((p) => p.x);
     const ys = points.map((p) => p.y);
@@ -585,7 +607,7 @@ export class Dimension implements Entity {
         return [
           ["p1", this.p("p1")],
           ["p2", this.p("p2")],
-          ["text_position", this.p("text_position")],
+          ["text_position", this.textAt ?? this.p("text_position")],
         ];
       case "angular":
         return [
@@ -620,11 +642,7 @@ export class Dimension implements Entity {
     if (this.dimType !== "linear" || (key !== "p1" && key !== "p2")) return point;
 
     const original = this.p(key);
-    const other = key === "p1" ? this.p("p2") : this.p("p1");
-    const tp = this.p("text_position");
-    const mid = { x: (original.x + other.x) / 2, y: (original.y + other.y) / 2 };
-    const horizontal = Math.abs(tp.y - mid.y) >= Math.abs(tp.x - mid.x);
-    return horizontal ? { x: original.x, y: point.y } : { x: point.x, y: original.y };
+    return this.linearHorizontal() ? { x: original.x, y: point.y } : { x: point.x, y: original.y };
   }
 
   getDisplayText(): string {

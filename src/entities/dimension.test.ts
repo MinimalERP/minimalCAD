@@ -244,3 +244,53 @@ describe("Dimension: shared interaction behavior", () => {
     expect(keys).toEqual(["line1_p2", "line2_p2", "text_position"]);
   });
 });
+
+describe("Dimension: decimals, small dimensions, movable text", () => {
+  const draw = (dim: Dimension): Dimension => {
+    dim.draw(fakeCtx(), identityViewport());
+    return dim;
+  };
+  const linear = (len: number, extra: Record<string, unknown> = {}): Dimension =>
+    new Dimension("linear", { p1: { x: 0, y: 0 }, p2: { x: len, y: 0 }, text_position: { x: len / 2, y: 20 }, ...extra } as never);
+
+  it("auto decimals keep real decimals (12.5 is not cut to '12.') and drop zeros", () => {
+    expect(draw(linear(12.5, { trim_zeros: 1 })).getDisplayText()).toBe("12.5");
+    expect(draw(linear(0.5, { trim_zeros: 1 })).getDisplayText()).toBe("0.5");
+    expect(draw(linear(10.25, { trim_zeros: 1 })).getDisplayText()).toBe("10.25");
+    expect(draw(linear(80, { trim_zeros: 1 })).getDisplayText()).toBe("80");
+    expect(draw(linear(100, { trim_zeros: 1 })).getDisplayText()).toBe("100");
+  });
+
+  it("fixed decimals (DIMDEC / sheet setting), after the view's measure scale", () => {
+    expect(draw(linear(12.5, { precision: 2 })).getDisplayText()).toBe("12.50");
+    expect(draw(linear(12.5, { precision: 0 })).getDisplayText()).toBe("13");
+    expect(draw(linear(40, { precision: 1, measure_scale: 2 })).getDisplayText()).toBe("80.0");
+  });
+
+  it("a small dimension puts its text outside, past the second extension line", () => {
+    const dim = draw(linear(3));
+    const [x0] = dim.getBounds();
+    const b = dim.getBounds();
+    expect(x0).toBeLessThan(0); // arrows outside, pointing in
+    expect(b[2]).toBeGreaterThan(3 + 4); // text past p2
+    // A roomy one keeps its text centred between the lines.
+    const wide = draw(linear(60));
+    const grip = wide.gripItems().find(([k]) => k === "text_position")![1];
+    expect(grip.x).toBeCloseTo(30, 9);
+  });
+
+  it("dragged text stays where it's dropped, and the dimension keeps measuring X", () => {
+    const dim = draw(linear(10));
+    dim.pinText();
+    // Dropped far along the line (and to the side): would read as a
+    // vertical dim if the direction weren't pinned.
+    dim.data.text_position = { x: 40, y: 22 };
+    draw(dim);
+    expect(dim.getDisplayText()).toBe("10.00");
+    const grip = dim.gripItems().find(([k]) => k === "text_position")![1];
+    expect(grip.x).toBeCloseTo(40, 9);
+    expect(grip.y).toBeCloseTo(22, 9);
+    // The dimension line runs out to the text.
+    expect(dim.getBounds()[2]).toBeGreaterThan(40);
+  });
+});

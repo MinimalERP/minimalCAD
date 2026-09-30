@@ -85,7 +85,7 @@ export class AngularDimensionCommand extends BaseCommand {
       this.line1.drawSelected(ctx, this.engine.viewport);
     }
     if (this.state === 2 && this.line1 !== null && this.line2 !== null && this.currentMousePos !== null) {
-      const preview = new Dimension("angular", this.buildData(this.currentMousePos));
+      const preview = new Dimension("angular", this.engine.styleDimension(this.buildData(this.currentMousePos)));
       preview.draw(ctx, this.engine.viewport, true);
     }
   }
@@ -106,7 +106,7 @@ export class AngularDimensionCommand extends BaseCommand {
 
   private executeGeneration(): void {
     this.undo.push(this.document.toDict());
-    const dim = new Dimension("angular", this.buildData(this.currentMousePos!));
+    const dim = new Dimension("angular", this.engine.styleDimension(this.buildData(this.currentMousePos!)));
     this.document.addEntity(dim);
     this.start();
   }

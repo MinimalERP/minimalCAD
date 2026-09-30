@@ -76,6 +76,9 @@ export interface SheetData {
   /** Annotations (dimensions, notes, lines) as serialized 2D entities. */
   entities: Record<string, unknown>[];
   constraints: unknown[];
+  /** Dimension decimals on this sheet: "auto" = no trailing zeros (25,
+   *  12.5), or a fixed 0-3. */
+  dimPrecision?: "auto" | number;
   /** The model the views show (a copy, refreshed from the linked model tab
    *  whenever the drawing tab opens) -- so a saved drawing stands alone. */
   model?: { name: string; part: unknown; entities: Record<string, unknown>[] };
@@ -112,6 +115,7 @@ export function parseSheets(raw: unknown): SheetData[] {
       views: o.views.filter((v): v is SheetView => typeof v === "object" && v !== null && typeof v.id === "string" && typeof v.scale === "number"),
       entities: Array.isArray(o.entities) ? o.entities : [],
       constraints: Array.isArray(o.constraints) ? o.constraints : [],
+      ...(typeof o.dimPrecision === "number" ? { dimPrecision: Math.max(0, Math.min(4, Math.round(o.dimPrecision))) } : {}),
       ...(typeof o.model === "object" && o.model !== null && Array.isArray(o.model.entities) ? { model: o.model } : {}),
     });
   }

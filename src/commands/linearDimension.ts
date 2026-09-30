@@ -66,7 +66,7 @@ export class LinearDimensionCommand extends BaseCommand {
 
   draw(ctx: CanvasRenderingContext2D): void {
     if (this.state !== 2 || this.p1 === null || this.p2 === null || this.currentMousePos === null) return;
-    const preview = new Dimension("linear", { p1: this.p1, p2: this.p2, text_position: this.currentMousePos });
+    const preview = new Dimension("linear", this.engine.styleDimension({ p1: this.p1, p2: this.p2, text_position: this.currentMousePos }));
     preview.draw(ctx, this.engine.viewport, true);
   }
 
@@ -76,7 +76,7 @@ export class LinearDimensionCommand extends BaseCommand {
 
   private executeGeneration(): void {
     this.undo.push(this.document.toDict());
-    const dim = new Dimension("linear", { p1: this.p1!, p2: this.p2!, text_position: this.currentMousePos! });
+    const dim = new Dimension("linear", this.engine.styleDimension({ p1: this.p1!, p2: this.p2!, text_position: this.currentMousePos! }));
     this.document.addEntity(dim);
     this.start();
   }

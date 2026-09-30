@@ -76,6 +76,9 @@ export class DimensionGripCommand extends BaseCommand {
 
   private execute(newPoint: Point): void {
     this.undo.push(this.document.toDict());
+    // Dragging the text: it stays where it's dropped, even outside the
+    // extension lines (small dimensions).
+    if (this.key === "text_position") this.dimension!.pinText();
     this.dimension!.data[this.key!] = { ...newPoint };
     this.engine.selection.clear();
     this.engine.cancelCommand();
@@ -85,6 +88,7 @@ export class DimensionGripCommand extends BaseCommand {
   draw(ctx: CanvasRenderingContext2D): void {
     if (this.dimension === null || this.key === null || this.currentPoint === null) return;
     const preview = this.dimension.copy();
+    if (this.key === "text_position") preview.pinText();
     preview.data[this.key] = { ...this.currentPoint };
     preview.draw(ctx, this.engine.viewport, true);
   }

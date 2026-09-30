@@ -77,6 +77,13 @@ export class DrawingController {
     private host: DrawingHost,
   ) {
     engine.backdrop = (ctx) => this.paint(ctx);
+    // New dimensions (and their previews) measure the PART: the scale of
+    // the view they're on.
+    engine.dimensionStyle = (anchor) => {
+      const id = anchor === null ? null : viewAt(this.refresh(), anchor, 1);
+      const view = this.refresh().views.find((v) => v.id === id);
+      return { measure_scale: view === undefined ? 1 : 1 / view.scale, trim_zeros: 1 };
+    };
     engine.underlayHidden = true;
     engine.ucsLabels = ["", ""];
   }
@@ -130,6 +137,7 @@ export class DrawingController {
 
   private refresh(): SheetGraphics {
     const sheet = this.sheet();
+    this.engine.dimPrecision = sheet.dimPrecision ?? "auto";
     const key = JSON.stringify({ ...sheet, model: undefined });
     if (this.graphics === null || key !== this.graphicsKey) {
       this.graphics = sheetGraphics(sheet, this.bodies, this.cache);
@@ -179,6 +187,15 @@ export class DrawingController {
         d.close();
         // Same places, the views that belong there in the new projection.
         this.setSheet(next.projection === s.projection ? next : { ...next, views: reproject(next.views, next.projection) });
+        // The sheet's decimals apply to every dimension already on it too.
+        if (next.dimPrecision !== s.dimPrecision) {
+          for (const e of this.engine.document.entities) {
+            if (!(e instanceof Dimension)) continue;
+            if (typeof next.dimPrecision === "number") e.data.precision = next.dimPrecision;
+            else delete e.data.precision;
+            e.data.trim_zeros = 1;
+          }
+        }
         this.zoomSheet();
       },
       onCancel: () => d.close(),
@@ -192,6 +209,19 @@ export class DrawingController {
       ],
       s.projection,
       (v) => (next.projection = v),
+    );
+    type Dec = "auto" | "0" | "1" | "2" | "3";
+    d.choice<Dec>(
+      "Decimals",
+      [
+        { value: "auto", label: "Auto", title: "No trailing zeros: 25, 12.5, 7.25" },
+        { value: "0", label: "0", title: "25" },
+        { value: "1", label: "0.0", title: "25.0" },
+        { value: "2", label: "0.00", title: "25.00" },
+        { value: "3", label: "0.000", title: "25.000" },
+      ],
+      s.dimPrecision === undefined || s.dimPrecision === "auto" ? "auto" : (String(s.dimPrecision) as Dec),
+      (v) => (next.dimPrecision = v === "auto" ? "auto" : Number(v)),
     );
     const text = (label: string, key: keyof SheetData["title"]): void => {
       d.number(label, "", s.title[key], (v) => (next.title[key] = v));

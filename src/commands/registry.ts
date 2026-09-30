@@ -40,6 +40,7 @@ import { SaveLibCommand } from "./saveLib";
 import { InsertLibCommand } from "./insertLib";
 import { ConstrainDistanceCommand } from "./constrainDistance";
 import { ExportPdfCommand } from "./exportPdf";
+import { DimDecimalsCommand } from "./dimDecimals";
 
 export interface RegistryEntry {
   factory: CommandFactory;
@@ -71,6 +72,7 @@ export const COMMAND_REGISTRY: Record<string, RegistryEntry> = {
   diameter: { factory: (engine) => new DiameterDimensionCommand(engine), aliases: ["ddi"] },
   radius: { factory: (engine) => new RadiusDimensionCommand(engine), aliases: ["dra"] },
   leader: { factory: (engine) => new LeaderCommand(engine), aliases: ["le", "lead"] },
+  dimdec: { factory: (engine) => new DimDecimalsCommand(engine), aliases: ["dimdec"] },
   insertlib: { factory: (engine) => new InsertLibCommand(engine), aliases: ["il", "insert"] },
   savelib: { factory: (engine) => new SaveLibCommand(engine), aliases: ["sl"] },
   constrain: { factory: (engine) => new ConstrainDistanceCommand(engine), aliases: ["con", "cdist"] },

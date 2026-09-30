@@ -54,6 +54,29 @@ export class Engine {
   backdrop: ((ctx: CanvasRenderingContext2D) => void) | null = null;
   underlayHidden = false;
 
+  /** Dimension decimals for new dimensions (DIMDEC): 0-4, or null = the
+   *  classic 2 decimals ("auto" trims zeros: 25, 12.5). */
+  dimPrecision: number | "auto" | null = null;
+  /** Extra data a new dimension gets from where it's measured -- a drawing
+   *  sheet's view scale (drawing/). */
+  dimensionStyle: ((anchor: Point | null) => Record<string, number>) | null = null;
+
+  /** `data` for a new dimension (its live preview too), with this drawing's
+   *  dimension settings applied -- so the value shown while placing it is
+   *  the value it keeps. */
+  styleDimension<T extends Record<string, unknown>>(data: T): T {
+    const out: Record<string, unknown> = { ...data };
+    if (this.dimPrecision === "auto") out.trim_zeros = 1;
+    else if (typeof this.dimPrecision === "number") out.precision = this.dimPrecision;
+    if (this.dimensionStyle !== null) {
+      const anchor = Object.values(data).find(
+        (v): v is Point => typeof v === "object" && v !== null && "x" in v && "y" in v,
+      );
+      Object.assign(out, this.dimensionStyle(anchor ?? null));
+    }
+    return out as T;
+  }
+
   /** Axis names for the 2D UCS icon: which 3D axes this drawing's screen
    *  right/up are -- X/Y for the base drawing, e.g. X/Z on a Front sketch. */
   ucsLabels: [string, string] = ["X", "Y"];
