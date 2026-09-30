@@ -98,6 +98,17 @@ function num(n: number): string {
   return n.toFixed(3);
 }
 
+/** "#rrggbb" / "rgb(r, g, b)" -> PDF "r g b" (0..1), or null. */
+function pdfColor(css: string): string | null {
+  let rgb: number[] | null = null;
+  const hex = /^#([0-9a-f]{6})$/i.exec(css.trim());
+  if (hex !== null) rgb = [0, 2, 4].map((i) => parseInt(hex[1]!.slice(i, i + 2), 16));
+  const fn = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i.exec(css.trim());
+  if (fn !== null) rgb = [Number(fn[1]), Number(fn[2]), Number(fn[3])];
+  if (/^#000$/.test(css.trim())) rgb = [0, 0, 0];
+  return rgb === null ? null : rgb.map((v) => (v / 255).toFixed(3)).join(" ");
+}
+
 /** Escapes a string for a PDF literal `(...)` string and drops anything
  *  outside Latin-1 (WinAnsiEncoding's practical range for the built-in
  *  Helvetica font this module uses, no font embedding) -- a CAD drawing's
@@ -216,14 +227,21 @@ class PdfCanvasContext {
 
   // --- Property setters entities assign but this print path treats specially ---
 
-  set strokeStyle(_v: string) {
-    /* always solid black ink -- see class doc comment */
+  set strokeStyle(v: string) {
+    /* always solid black ink -- see class doc comment -- except a sheet's own shading */
+    const c = this.honorLineWidth ? pdfColor(v) : null;
+    if (c !== null) this.ops.push(`${c} RG`);
   }
-  set fillStyle(_v: string) {
-    /* always solid black ink -- see class doc comment */
+  set fillStyle(v: string) {
+    const c = this.honorLineWidth ? pdfColor(v) : null;
+    if (c !== null) this.ops.push(`${c} rg`);
   }
-  set lineWidth(_v: number) {
-    /* always the fixed physical PRINT_LINE_WEIGHT_MM -- see emitPageSetup() */
+  /** Drawing sheets set this while painting their own graphics, whose line
+   *  widths ARE physical (page points); entities keep the fixed weight. */
+  honorLineWidth = false;
+  set lineWidth(v: number) {
+    /* otherwise always the fixed physical PRINT_LINE_WEIGHT_MM -- see emitPageSetup() */
+    if (this.honorLineWidth) this.ops.push(`${num(v)} w`);
   }
 
   set font(value: string) {
@@ -362,6 +380,23 @@ class PdfCanvasContext {
   // --- Rects -- only reachable via drawSelected() paths PDF export never
   // calls (export always draws entities unselected), kept for interface
   // completeness/robustness rather than because anything exercises them today. ---
+
+  /** Fills the current path (a sheet's shaded views). */
+  fill(rule?: "nonzero" | "evenodd"): void {
+    if (this.path.length === 0) return;
+    this.emitPath();
+    this.ops.push(rule === "evenodd" ? "f*" : "f");
+  }
+
+  /** Fill (even-odd) AND stroke the current path with one operator -- a
+   *  shaded patch's outline is written once, not twice. */
+  fillStrokeEvenOdd(): void {
+    if (this.path.length === 0) return;
+    this.ops.push("[] 0 d");
+    this.emitPath();
+    this.ops.push("B*");
+    this.path = [];
+  }
 
   fillRect(x: number, y: number, w: number, h: number): void {
     this.strokeOrFillRect(x, y, w, h, "f");
@@ -512,18 +547,74 @@ export function exportPdf(document: Document, windowRect: Bounds | null, scaleMo
   return { bytes, warning };
 }
 
+/**
+ * A drawing sheet as a one-page vector PDF at TRUE SIZE: the page is the
+ * paper (widthMm x heightMm) and world units are paper millimetres, with
+ * the sheet's world laid out Y-down over x 0..W, y -H..0 (paper Y-up,
+ * negated). `paint` draws the sheet's own graphics (border, title block,
+ * views) and may set real line widths in page points; `entities` (the
+ * annotations: dimensions, notes...) print at the fixed weight.
+ */
+export async function exportSheetPdf(
+  widthMm: number,
+  heightMm: number,
+  paint: (ctx: CanvasRenderingContext2D, viewport: Viewport) => void,
+  entities: readonly { draw(ctx: CanvasRenderingContext2D, viewport: Viewport, preview?: boolean): void }[],
+): Promise<Uint8Array> {
+  const pageW = widthMm * POINTS_PER_MM;
+  const pageH = heightMm * POINTS_PER_MM;
+  const viewport = new Viewport(
+    () => pageW,
+    () => pageH,
+  );
+  viewport.zoom = POINTS_PER_MM;
+  viewport.panOffset = { x: 0, y: pageH };
+  const pdfCtx = new PdfCanvasContext(POINTS_PER_MM, 1.0, null);
+  pageHeightForFlip = pageH;
+  pdfCtx.ops.push("q");
+  pdfCtx.ops.push(`0 0 ${num(pageW)} ${num(pageH)} re W n`);
+  pdfCtx.ops.push("0 0 0 RG");
+  pdfCtx.ops.push("0 0 0 rg");
+  pdfCtx.ops.push("1 J 1 j"); // round caps / joins: clean corners at any weight
+  pdfCtx.honorLineWidth = true;
+  paint(pdfCtx as unknown as CanvasRenderingContext2D, viewport);
+  pdfCtx.honorLineWidth = false;
+  pdfCtx.ops.push(`${num(PRINT_LINE_WEIGHT_MM * POINTS_PER_MM)} w`);
+  for (const entity of entities) entity.draw(pdfCtx as unknown as CanvasRenderingContext2D, viewport, false);
+  pdfCtx.ops.push("Q");
+  pageHeightForFlip = PAGE_HEIGHT_PT;
+  // Compressed (FlateDecode, the browser's own deflate): a sheet's page is
+  // thousands of short, repetitive operators -- several times smaller to
+  // send to the shop floor.
+  const content = pdfCtx.ops.join("\n");
+  const packed = await deflate(content);
+  return packed === null ? buildPdfFile(content, pageW, pageH) : buildPdfFile(packed, pageW, pageH, " /Filter /FlateDecode");
+}
+
+/** zlib-deflates a byte string (one char = one byte), returned the same
+ *  way; null where the platform has no CompressionStream. */
+async function deflate(text: string): Promise<string | null> {
+  if (typeof CompressionStream === "undefined") return null;
+  const bytes = Uint8Array.from(text, (ch) => ch.charCodeAt(0) & 0xff);
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
+  const out = new Uint8Array(await new Response(stream).arrayBuffer());
+  let s = "";
+  for (let i = 0; i < out.length; i += 0x8000) s += String.fromCharCode(...out.subarray(i, i + 0x8000));
+  return s;
+}
+
 // --- PDF file structure: header, objects, xref table, trailer. See this
 // module's own header comment for why this is hand-written rather than
 // pulled from a library. ---
 
-function buildPdfFile(contentStream: string): Uint8Array {
+function buildPdfFile(contentStream: string, pageW = PAGE_WIDTH_PT, pageH = PAGE_HEIGHT_PT, filter = ""): Uint8Array {
   const objects: string[] = [];
   objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
   objects[2] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
   objects[3] =
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(PAGE_WIDTH_PT)} ${num(PAGE_HEIGHT_PT)}] ` +
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(pageW)} ${num(pageH)}] ` +
     "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>";
-  objects[4] = `<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream`;
+  objects[4] = `<< /Length ${contentStream.length}${filter} >>\nstream\n${contentStream}\nendstream`;
   objects[5] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
 
   let file = "%PDF-1.4\n%\xe2\xe3\xcf\xd3\n";

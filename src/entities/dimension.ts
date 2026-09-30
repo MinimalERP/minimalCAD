@@ -124,6 +124,15 @@ export class Dimension implements Entity {
     return typeof v === "number" ? v : fallback;
   }
 
+  /** A measured length as text. On a drawing sheet the dimension carries
+   *  `measure_scale` (1 / the view scale: paper mm -> part mm) and
+   *  `trim_zeros` (25 rather than 25.00). */
+  private len(paper: number): string {
+    const v = paper * this.num("measure_scale", 1);
+    if (this.num("trim_zeros", 0) !== 1) return v.toFixed(2);
+    return v.toFixed(2).replace(/.?0+$/, "");
+  }
+
   private str(key: string): string | undefined {
     const v = this.data[key];
     return typeof v === "string" ? v : undefined;
@@ -285,7 +294,7 @@ export class Dimension implements Entity {
 
     if (horizontal) {
       const val = Math.abs(p2.x - p1.x);
-      const txt = this.str("text_override") || val.toFixed(2);
+      const txt = this.str("text_override") || this.len(val);
       this.lastText = txt;
       const dimY = tp.y;
 
@@ -310,7 +319,7 @@ export class Dimension implements Entity {
       this.centeredText(ctx, viewport, { x: centerX, y: dimY }, txt);
     } else {
       const val = Math.abs(p2.y - p1.y);
-      const txt = this.str("text_override") || val.toFixed(2);
+      const txt = this.str("text_override") || this.len(val);
       this.lastText = txt;
       const dimX = tp.x;
 
@@ -342,7 +351,7 @@ export class Dimension implements Entity {
     const tp = this.p("text_position");
 
     const val = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    const txt = this.str("text_override") || val.toFixed(2);
+    const txt = this.str("text_override") || this.len(val);
     this.lastText = txt;
     if (val === 0) return;
 
@@ -440,7 +449,7 @@ export class Dimension implements Entity {
     const radius = dist(center, edgePt);
     if (radius === 0) return;
 
-    const computed = isDiameter ? `Ø${(radius * 2).toFixed(2)}` : `R${radius.toFixed(2)}`;
+    const computed = isDiameter ? `Ø${this.len(radius * 2)}` : `R${this.len(radius)}`;
     const txt = this.str("text_override") || computed;
     this.lastText = txt;
 

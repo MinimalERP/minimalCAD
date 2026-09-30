@@ -999,15 +999,16 @@ export class CanvasView {
     ctx.fillStyle = COLOR_BACKGROUND;
     ctx.fillRect(0, 0, width, height);
 
-    this.drawGrid();
-    this.drawUnderlay();
+    if (this.engine.backdrop !== null) this.engine.backdrop(ctx);
+    else this.drawGrid();
+    if (!this.engine.underlayHidden) this.drawUnderlay();
     this.drawEntities();
     this.drawConstraints();
     this.drawSelectionHighlights();
     this.drawSelectionBox();
     this.engine.commandManager.draw(this.ctx);
     this.drawSnapMarker();
-    this.drawUcsIcon();
+    if (this.engine.backdrop === null) this.drawUcsIcon(); // not on a drawing sheet
     this.drawTouchOffsetCursor();
 
     ctx.restore();

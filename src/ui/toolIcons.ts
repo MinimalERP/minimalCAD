@@ -494,7 +494,63 @@ function viewCube(face: "front" | "top" | "right" | "iso"): Drawer {
   };
 }
 
+// --- Drawing sheet tools: a sheet with its title block, and views on it ---
+
+function sheetOutline(ctx: CanvasRenderingContext2D): void {
+  ctx.strokeRect(1.5, 3.5, 17, 13);
+  ctx.strokeRect(11, 13, 7.5, 3.5);
+}
+
+function drawSheet(ctx: CanvasRenderingContext2D): void {
+  sheetOutline(ctx);
+  line(ctx, 11, 14.8, 18.5, 14.8);
+}
+
+function drawBaseView(ctx: CanvasRenderingContext2D): void {
+  sheetOutline(ctx);
+  ctx.strokeRect(4, 6, 5, 4);
+  ctx.beginPath();
+  ctx.arc(6.5, 8, 1, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawProjectedView(ctx: CanvasRenderingContext2D): void {
+  ctx.strokeRect(1.5, 2, 7, 6);
+  dashed(ctx, () => ctx.strokeRect(12, 2, 6.5, 6));
+  ctx.strokeRect(1.5, 12, 7, 6);
+  line(ctx, 9.5, 5, 11, 5);
+  line(ctx, 5, 9, 5, 11);
+}
+
+function drawMoveView(ctx: CanvasRenderingContext2D): void {
+  ctx.strokeRect(5, 6, 10, 8);
+  line(ctx, 10, 1, 10, 19);
+  line(ctx, 1, 10, 19, 10);
+  arrowhead(ctx, 10, 1, -90);
+  arrowhead(ctx, 19, 10, 0);
+}
+
+function drawEditView(ctx: CanvasRenderingContext2D): void {
+  ctx.strokeRect(1.5, 5, 11, 9);
+  line(ctx, 9, 17, 18, 8);
+  line(ctx, 18, 8, 16, 6);
+  line(ctx, 16, 6, 7, 15);
+  line(ctx, 7, 15, 9, 17);
+}
+
+function drawDeleteView(ctx: CanvasRenderingContext2D): void {
+  ctx.strokeRect(1.5, 3, 12, 10);
+  line(ctx, 12, 11, 19, 18);
+  line(ctx, 19, 11, 12, 18);
+}
+
 const DRAWERS: Record<string, Drawer> = {
+  sheet: drawSheet,
+  baseview: drawBaseView,
+  projview: drawProjectedView,
+  moveview: drawMoveView,
+  editview: drawEditView,
+  deleteview: drawDeleteView,
   newsketch: drawNewSketch,
   finishsketch: drawFinishSketch,
   extrude: drawExtrude,

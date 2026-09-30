@@ -42,7 +42,7 @@ export class AngularDimensionCommand extends BaseCommand {
     const tolerance = this.engine.pickTolerance();
 
     if (this.state === 0) {
-      for (const entity of this.document.getEntities()) {
+      for (const entity of [...this.document.getEntities(), ...this.engine.underlay]) {
         if (entity instanceof Line && entity.hitTest(worldPos, tolerance)) {
           this.line1 = entity;
           this.state = 1;
@@ -51,7 +51,7 @@ export class AngularDimensionCommand extends BaseCommand {
         }
       }
     } else if (this.state === 1) {
-      for (const entity of this.document.getEntities()) {
+      for (const entity of [...this.document.getEntities(), ...this.engine.underlay]) {
         if (!(entity instanceof Line) || !entity.hitTest(worldPos, tolerance) || entity === this.line1) continue;
 
         if (!linesIntersect(this.line1!, entity)) {

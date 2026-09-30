@@ -23,7 +23,7 @@ import type { PlaneRef } from "../part/types";
 
 /** Which toolset a tab is showing -- see workspace/workspace.ts. The
  *  existing 2D app is simply the "drafting" workspace. */
-export type Workspace = "drafting" | "model" | "sketch";
+export type Workspace = "drafting" | "model" | "sketch" | "drawing";
 
 /** A 3D part sketch open for editing: its own Engine+Viewport, so every 2D
  *  command/osnap/grip works on it unchanged. Written back into
@@ -42,6 +42,11 @@ export interface TabSession {
   readonly engine: Engine;
   workspace: Workspace;
   sketch: SketchEdit | null;
+  /** A drawing tab: the id of the model tab its views come from. */
+  drawingOf: string | null;
+  /** Tabs sharing a group (a model and its drawing) share a colour in the
+   *  tab bar; null = not grouped. */
+  group: number | null;
 }
 
 // Numbers new tabs "Untitled 1", "Untitled 2", ... for the lifetime of the
@@ -63,7 +68,7 @@ export function createTabSession(
 ): TabSession {
   untitledCounter++;
   const { viewport, engine } = createEngine(getCanvasWidth, getCanvasHeight, commandBar, requestRedraw, onCommandChanged);
-  return { id: generateId(), name: `Untitled ${untitledCounter}`, viewport, engine, workspace: "drafting", sketch: null };
+  return { id: generateId(), name: `Untitled ${untitledCounter}`, viewport, engine, workspace: "drafting", sketch: null, drawingOf: null, group: null };
 }
 
 /** One homed Viewport + the Engine that owns it -- a tab's main drawing, or

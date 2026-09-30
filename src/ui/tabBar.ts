@@ -22,6 +22,9 @@ export interface TabBarHost {
   rename(id: string, name: string): void;
 }
 
+/** Tab group colours (a model tab + its drawing tab), like browser tab groups. */
+const GROUP_COLORS = ["#e8a33d", "#4fb477", "#c678dd", "#e06c75", "#56b6c2", "#d19a66"];
+
 export interface TabBar {
   /** Call after the host's sessions/active-id state changes (new/close/rename/activate). */
   refresh(): void;
@@ -34,6 +37,12 @@ export function buildTabBar(root: HTMLElement, host: TabBarHost): TabBar {
     for (const session of host.getSessions()) {
       const tab = document.createElement("div");
       tab.className = session.id === host.getActiveId() ? "tab active" : "tab";
+      // A model and its drawing tab: one group, one colour.
+      if (session.group !== null) {
+        tab.classList.add("grouped");
+        tab.style.setProperty("--group-color", GROUP_COLORS[session.group % GROUP_COLORS.length]!);
+      }
+      if (session.workspace === "drawing") tab.classList.add("drawing");
       // Same focus-steal prevention as toolbar.ts's own buttons -- without
       // it, clicking a tab while a command is mid-flight on another tab
       // would silently steal focus back from the command bar's input field.

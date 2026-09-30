@@ -70,6 +70,16 @@ export class CommandManager {
     return true;
   }
 
+  /** Runs a command that isn't in the registry (e.g. a drawing sheet's
+   *  Base View) -- same lifecycle as startCommand, never repeatable. */
+  startCustom(name: string, command: Command): void {
+    if (this.currentCommand !== null) this.currentCommand.cancel();
+    this.currentCommand = command;
+    this.currentName = name.toUpperCase();
+    command.start();
+    this.onCommandChanged?.();
+  }
+
   repeatLast(): boolean {
     if (this.lastCommandName === null) return false;
     return this.startCommand(this.lastCommandName);

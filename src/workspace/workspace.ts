@@ -17,13 +17,14 @@
 
 import type { CanvasView } from "../ui/canvasView";
 import type { CommandBar } from "../ui/commandBar";
-import type { ModelAction, ToolbarHandle, ToolbarWorkspaceHost } from "../ui/toolbar";
+import type { DrawingToolAction, ModelAction, ToolbarHandle, ToolbarWorkspaceHost } from "../ui/toolbar";
 import type { TabSession } from "../engine/session";
 import { createEngine } from "../engine/session";
 import type { Engine } from "../engine/engine";
 import type { PlaneRef, SketchData } from "../part/types";
 import { emptyPart, parsePart } from "../part/types";
 import type { ModelController } from "../view3d/modelController";
+import type { DrawingController } from "../drawing/drawingController";
 import { showToast } from "../ui/toast";
 
 export interface WorkspaceDeps {
@@ -35,12 +36,18 @@ export interface WorkspaceDeps {
   getSession(): TabSession;
   requestRedraw(): void;
   onCommandChanged(): void;
+  /** Open (or switch to) the drawing tab of `source`. */
+  openDrawingTab(source: TabSession): void;
+  findSession(id: string): TabSession | undefined;
 }
 
 export class WorkspaceController implements ToolbarWorkspaceHost {
   private toolbar: ToolbarHandle | null = null;
   private model: ModelController | null = null;
   private modelLoading: Promise<ModelController> | null = null;
+  /** One sheet controller per drawing tab (the module loads on first use). */
+  private drawings = new Map<string, DrawingController>();
+  private drawingModule: Promise<typeof import("../drawing/drawingController")> | null = null;
 
   constructor(private deps: WorkspaceDeps) {}
 
@@ -61,7 +68,7 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
 
   switchTo(workspace: "drafting" | "model"): void {
     const session = this.deps.getSession();
-    if (session.workspace === workspace || session.workspace === "sketch") return;
+    if (session.workspace === workspace || session.workspace === "sketch" || session.workspace === "drawing") return;
     session.engine.cancelCommand();
     session.workspace = workspace;
     this.apply(session);
@@ -76,6 +83,12 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
 
   documentChanged(): void {
     const session = this.deps.getSession();
+    // Opened a drawing file: this tab becomes a drawing tab.
+    if (session.engine.document.sheets !== undefined && session.workspace !== "sketch") {
+      session.workspace = "drawing";
+      this.apply(session);
+      return;
+    }
     // Opening a pure 3D part file drops you straight into 3D.
     if (session.workspace === "drafting" && session.engine.document.part !== undefined && session.engine.document.entities.length === 0) {
       session.workspace = "model";
@@ -83,6 +96,8 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
       return;
     }
     if (session.workspace === "model") this.model?.refresh();
+    // Opened a model file in 2D: offer Finish 2D / Drawing right away.
+    else if (session.workspace === "drafting") this.apply(session);
   }
 
   finish2d(): void {
@@ -166,6 +181,48 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
     if (engine.document.entities.length > 0 || engine.underlay.length > 0) engine.zoomExtents();
   }
 
+  // --- drawing tabs ---
+
+  openDrawing(): void {
+    const session = this.deps.getSession();
+    if (session.workspace === "drawing" || session.workspace === "sketch") return;
+    this.deps.openDrawingTab(session);
+  }
+
+  drawingAction(action: DrawingToolAction): void {
+    const session = this.deps.getSession();
+    if (session.workspace !== "drawing") return;
+    void this.loadDrawing(session).then((d) => {
+      if (action === "fit") d.zoomSheet();
+      else d.action(action);
+    });
+  }
+
+  private loadDrawing(session: TabSession): Promise<DrawingController> {
+    const have = this.drawings.get(session.id);
+    if (have !== undefined) return Promise.resolve(have);
+    this.drawingModule ??= import("../drawing/drawingController");
+    return this.drawingModule.then((mod) => {
+      const again = this.drawings.get(session.id);
+      if (again !== undefined) return again;
+      const d = new mod.DrawingController(session.engine, session.viewport, {
+        source: () => {
+          const model = session.drawingOf === null ? undefined : this.deps.findSession(session.drawingOf);
+          if (model === undefined || model.engine.document.part === undefined) return null;
+          return {
+            name: model.name,
+            part: structuredClone(model.engine.document.part),
+            entities: model.engine.document.entities.map((e) => e.serialize()),
+          };
+        },
+        dialogParent: this.deps.canvasEl.parentElement!,
+        requestRedraw: this.deps.requestRedraw,
+      });
+      this.drawings.set(session.id, d);
+      return d;
+    });
+  }
+
   // --- applying a session's workspace to the shared UI ---
 
   /** Shows the right canvas + toolbar for `session`. Also used on tab switch. */
@@ -180,7 +237,13 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
     const sketch = session.sketch;
     const where =
       sketch === null ? "" : sketch.plane.base === "face" ? `face of ${sketch.plane.face?.feature ?? "?"}` : `${sketch.plane.base} plane`;
-    const label = sketch !== null ? `${sketch.sketchId} on ${where}` : "";
+    const model = session.drawingOf === null ? undefined : this.deps.findSession(session.drawingOf);
+    const label =
+      sketch !== null
+        ? `${sketch.sketchId} on ${where}`
+        : ws === "drawing"
+          ? `Drawing${model !== undefined ? ` of ${model.name}` : ""}`
+          : "";
     // The 2D drawing is the XY plane: show the solids' plan outline under it.
     if (ws === "drafting") {
       session.engine.underlay =
@@ -198,8 +261,17 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
       });
     } else {
       this.model?.hide();
+      if (ws === "drawing") {
+        const first = !this.drawings.has(session.id);
+        void this.loadDrawing(session).then((d) => {
+          if (this.deps.getSession() !== session) return;
+          d.enter(first);
+          this.deps.requestRedraw();
+        });
+      }
       this.deps.commandBar.setReady();
       if (ws === "sketch") this.deps.commandBar.setStatus("SKETCH", `${label} - draw a closed profile, then Finish Sketch`);
+      else if (ws === "drawing") this.deps.commandBar.setStatus("DRAWING", `${label} - place views, then dimension them`);
       else if (session.engine.document.part !== undefined) {
         this.deps.commandBar.setStatus("2D", "Editing the XY drawing of the 3D model - Finish 2D to return to 3D");
       }

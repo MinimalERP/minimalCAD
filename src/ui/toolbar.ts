@@ -98,6 +98,15 @@ const SKETCH_GROUPS: readonly (readonly string[])[] = [
 /** 3D-workspace actions (handled by the lazily-loaded model module). */
 export type ModelAction = "newsketch" | "workplane" | "extrude" | "hole" | "fillet" | "chamfer" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
 
+/** Drawing-tab actions (handled by the lazily-loaded drawing module). */
+export type DrawingToolAction = "sheet" | "baseview" | "projview" | "moveview" | "editview" | "deleteview" | "print" | "fit";
+
+/** Annotation tools offered on a drawing sheet. */
+const DRAWING_GROUPS: readonly (readonly string[])[] = [
+  ["linear", "aligned", "angular", "diameter", "radius", "leader", "text"],
+  ["line", "circle", "move", "copy", "trim"],
+];
+
 /** What the toolbar needs from the workspace controller -- kept as a narrow
  *  interface so this module never imports any 3D code. */
 export interface ToolbarWorkspaceHost {
@@ -108,6 +117,9 @@ export interface ToolbarWorkspaceHost {
   modelAction(action: ModelAction): void;
   /** Document content was replaced/undone outside a command (Open, Undo...). */
   documentChanged(): void;
+  /** Open (or switch to) this model's drawing tab. */
+  openDrawing(): void;
+  drawingAction(action: DrawingToolAction): void;
 }
 
 export interface ToolbarHandle {
@@ -141,6 +153,9 @@ export function buildToolbar(
     host.finish2d(),
   );
   finish2dBtn.classList.add("finish-sketch");
+  const drawingBtn = textButton(switcher, "Drawing", "2D drawing of this model (views, dimensions, title block) in its own tab", () =>
+    host.openDrawing(),
+  );
   switcher.appendChild(gap());
 
   const sketchBanner = group(root, "ws-sketch-banner");
@@ -214,6 +229,34 @@ export function buildToolbar(
   addUtilityButton(sketch, "redo", "Redo", () => getActiveEngine().redoAction());
   addUtilityButton(sketch, "zoomextents", "Zoom Extents", () => getActiveEngine().zoomExtents());
 
+  // --- Drawing tab (sheet, views, annotations) ---
+  const drawingBanner = group(root, "ws-sketch-banner");
+  const drawingLabelEl = document.createElement("span");
+  drawingLabelEl.className = "ws-sketch-label";
+  drawingBanner.appendChild(drawingLabelEl);
+  drawingBanner.appendChild(gap());
+  const drawing = group(root, "ws-group");
+  addUtilityButton(drawing, "sheet", "Sheet - paper size, 1st / 3rd angle, title block", () => host.drawingAction("sheet"));
+  addUtilityButton(drawing, "baseview", "Base View - pick front / top / side / iso and a scale, click to place", () =>
+    host.drawingAction("baseview"),
+  );
+  addUtilityButton(drawing, "projview", "Projected View - click a view, then place views around it", () =>
+    host.drawingAction("projview"),
+  );
+  addUtilityButton(drawing, "moveview", "Move View (projected views stay in line)", () => host.drawingAction("moveview"));
+  addUtilityButton(drawing, "editview", "Edit View - scale, hidden lines, label", () => host.drawingAction("editview"));
+  addUtilityButton(drawing, "deleteview", "Delete View (and the views projected from it)", () => host.drawingAction("deleteview"));
+  drawing.appendChild(gap());
+  addCommandGroups(drawing, DRAWING_GROUPS, getActiveEngine, requestRedraw);
+  addUtilityButton(drawing, "undo", "Undo", () => getActiveEngine().undoAction());
+  addUtilityButton(drawing, "redo", "Redo", () => getActiveEngine().redoAction());
+  addUtilityButton(drawing, "zoomextents", "Zoom to the sheet", () => host.drawingAction("fit"));
+  drawing.appendChild(gap());
+  addUtilityButton(drawing, "pdfexport", "Print to PDF - true size on the sheet's paper (print at 100%)", () =>
+    host.drawingAction("print"),
+  );
+  addFileButtons(drawing, getActiveEngine, host);
+
   // Cloud UI mounts once into its own group (mounting it twice isn't safe).
   const cloud = group(root, "ws-group");
   initCloudUi(cloud, getActiveEngine, requestRedraw);
@@ -222,15 +265,18 @@ export function buildToolbar(
     drafting: [switcher, drafting, cloud],
     model: [switcher, model, cloud],
     sketch: [sketchBanner, sketch],
+    drawing: [drawingBanner, drawing],
   };
-  const all = [switcher, sketchBanner, drafting, model, sketch, cloud];
+  const all = [switcher, sketchBanner, drafting, model, sketch, drawingBanner, drawing, cloud];
 
   function setWorkspace(workspace: Workspace, sketchLabel = "", modelLinked = false): void {
     for (const el of all) el.hidden = !visible[workspace].includes(el);
     finish2dBtn.hidden = !(workspace === "drafting" && modelLinked);
+    drawingBtn.hidden = !(workspace === "model" || modelLinked);
+    drawingLabelEl.textContent = workspace === "drawing" ? sketchLabel : "";
     btn2d.classList.toggle("active", workspace === "drafting");
     btn3d.classList.toggle("active", workspace === "model");
-    sketchLabelEl.textContent = sketchLabel;
+    sketchLabelEl.textContent = workspace === "sketch" ? sketchLabel : "";
   }
   setWorkspace("drafting");
   return { setWorkspace };

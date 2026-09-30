@@ -121,7 +121,29 @@ const workspace = new WorkspaceController({
   getSession: getActiveSession,
   requestRedraw,
   onCommandChanged,
+  openDrawingTab,
+  findSession: (id) => sessions.find((s) => s.id === id),
 });
+
+// Tab groups: a model tab and its drawing tab share a colour.
+let nextGroup = 0;
+
+/** Switches to `source`'s drawing tab, making one (right after it) if none. */
+function openDrawingTab(source: TabSession): void {
+  const existing = sessions.find((s) => s.drawingOf === source.id);
+  if (existing !== undefined) {
+    activateSession(existing.id);
+    return;
+  }
+  source.group ??= nextGroup++;
+  const drawing = newSession();
+  drawing.workspace = "drawing";
+  drawing.drawingOf = source.id;
+  drawing.group = source.group;
+  drawing.name = `${source.name} - Drawing`;
+  sessions.splice(sessions.indexOf(source) + 1, 0, drawing);
+  activateSession(drawing.id);
+}
 
 commandBar.addEventListener("inputSubmitted", (e) => {
   if (workspace.isModel()) {

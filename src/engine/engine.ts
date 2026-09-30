@@ -48,6 +48,12 @@ export class Engine {
    *  being edited (view3d/). Never selectable, never saved, never undone. */
   underlay: Entity[] = [];
 
+  /** Drawing sheets (drawing/): the sheet paints itself behind the document
+   *  instead of the grid, and its view geometry is underlay for osnap only
+   *  (the painter draws it with real line weights, so it isn't drawn twice). */
+  backdrop: ((ctx: CanvasRenderingContext2D) => void) | null = null;
+  underlayHidden = false;
+
   /** Axis names for the 2D UCS icon: which 3D axes this drawing's screen
    *  right/up are -- X/Y for the base drawing, e.g. X/Z on a Front sketch. */
   ucsLabels: [string, string] = ["X", "Y"];

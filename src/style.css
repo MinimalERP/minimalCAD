@@ -182,6 +182,22 @@ body {
   border-color: #007acc;
 }
 
+/* A model tab and its drawing tab: same colour strip + tint (tab groups). */
+.tab.grouped {
+  border-top: 3px solid var(--group-color);
+  background: color-mix(in srgb, var(--group-color) 14%, #2d2d30);
+}
+
+.tab.grouped.active {
+  background: color-mix(in srgb, var(--group-color) 30%, #094771);
+  border-color: var(--group-color);
+}
+
+.tab.drawing .tab-name::before {
+  content: "▭ ";
+  color: var(--group-color, #9a9a9a);
+}
+
 .tab-name {
   font-family: "Courier New", monospace;
   font-size: 12px;
@@ -919,6 +935,61 @@ body {
 #gl-canvas[hidden] ~ .feature-dialog {
   display: none;
 }
+/* Drawing view orientation cube (drawing/orientCube.ts): the cube in the
+   middle, tumble arrows around it, roll + iso in the corners. */
+.feature-dialog .orient-cube {
+  display: flex;
+  justify-content: center;
+  margin: 4px 0 6px;
+}
+.feature-dialog .oc-grid {
+  display: grid;
+  grid-template-columns: 30px 112px 30px;
+  grid-template-rows: 26px 112px 26px;
+  gap: 3px;
+  align-items: center;
+  justify-items: center;
+}
+.feature-dialog .oc-canvas {
+  cursor: pointer;
+  border-radius: 4px;
+  background: #1e1e1e;
+}
+.feature-dialog .oc-btn {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: #1e1e1e;
+  color: #cfcfcf;
+  border: 1px solid #4a4a4a;
+  border-radius: 3px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.feature-dialog .oc-btn:hover {
+  border-color: #6a6a6a;
+  color: #fff;
+}
+.feature-dialog .oc-btn.active {
+  background: #094771;
+  border-color: #007acc;
+}
+.feature-dialog .oc-iso {
+  font-size: 10px;
+}
+.feature-dialog .oc-left,
+.feature-dialog .oc-right {
+  height: 60px;
+}
+.feature-dialog .oc-up,
+.feature-dialog .oc-down {
+  width: 60px;
+}
+
+/* Drawing tabs (drawing/) use the same dialogs over the 2D sheet. */
+body[data-workspace="drawing"] #gl-canvas[hidden] ~ .feature-dialog {
+  display: flex;
+}
 .feature-dialog .fd-title {
   padding: 8px 12px;
   font-weight: 600;
@@ -985,6 +1056,7 @@ body {
 .feature-dialog .fd-choice {
   display: flex;
   flex: 1 1 auto;
+  flex-wrap: wrap; /* many choices (a drawing's 7 views) wrap to rows */
   gap: 4px;
 }
 .feature-dialog .fd-choice-btn {
@@ -993,7 +1065,7 @@ body {
   align-items: center;
   gap: 2px;
   flex: 1 1 0;
-  min-width: 0;
+  min-width: 44px;
   padding: 3px 2px;
   background: #1e1e1e;
   color: #cfcfcf;

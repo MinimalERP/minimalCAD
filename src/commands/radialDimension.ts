@@ -60,7 +60,7 @@ abstract class RadialDimensionCommandBase extends BaseCommand {
   leftClick(worldPos: Point): void {
     if (this.state === 0) {
       const tolerance = this.engine.pickTolerance();
-      for (const entity of this.document.getEntities()) {
+      for (const entity of [...this.document.getEntities(), ...this.engine.underlay]) {
         if ((entity instanceof Circle || entity instanceof Arc) && entity.hitTest(worldPos, tolerance)) {
           this.targetCurve = entity;
           this.state = 1;
