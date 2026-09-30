@@ -399,6 +399,25 @@ describe("radial holes (on a round face)", () => {
     expect(removed).toBeLessThan(Math.PI * 25 * 40);
   });
 
+  it("four through holes crossing on the axis (0/45/90/135°): watertight, and the mesh stays lean", () => {
+    const one = rebuild(shaft({ centers: [{ x: 40, y: 0 }], diameter: "10", depth: "5", extent: "through", style: "plain" }), [circle()]).bodies[0]!;
+    const r = rebuild(
+      shaft({ centers: [0, 45, 90, 135].map((a) => ({ x: 40, y: a })), diameter: "10", depth: "5", extent: "through", style: "plain" }),
+      [circle()],
+    );
+    expect(r.status.get("Hole001")).toEqual({ ok: true });
+    const b = r.bodies[0]!;
+    expect(isWatertight(b)).toBe(true);
+    // Each extra hole removes less than a whole bore (they share the middle).
+    const oneBore = shaftVol() - vol(one);
+    const removed = shaftVol() - vol(b);
+    expect(removed).toBeGreaterThan(oneBore * 2);
+    expect(removed).toBeLessThan(oneBore * 4);
+    // Split points left on straight facet sides are thinned out after every
+    // boolean (they used to pile up: ~45k triangles and half a minute).
+    expect(b.mesh.indices.length / 3).toBeLessThan(20000);
+  });
+
   it("to axis: stops at the centre line (plus the drill point)", () => {
     const r = rebuild(shaft({ centers: [{ x: 40, y: 0 }], diameter: "10", depth: "5", extent: "toAxis", style: "plain" }), [circle()]);
     expect(r.status.get("Hole001")).toEqual({ ok: true });

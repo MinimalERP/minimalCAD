@@ -32,7 +32,8 @@ import { dependsOn, holeTools, refLine, resolveCenters, signedDistance } from ".
 import { edgesOnFace, refsOnRoundFace } from "../../part/faceTopology";
 import type { RoundFaceRef } from "../../part/faceTopology";
 import type { CylFrame, Surface } from "../../part/cylFrame";
-import { isCyl, mmPerDeg, wrapDeg } from "../../part/cylFrame";
+import { cylFromWorld, isCyl, mmPerDeg, surfaceTo3d, wrapDeg } from "../../part/cylFrame";
+import { dot, normalize } from "../../part/vec3";
 import { evalExpression } from "../../part/params";
 import type { Point } from "../../core/types";
 import type { Hit } from "../modelView";
@@ -377,6 +378,21 @@ export class HoleCommand implements ModelCommand {
     return line === undefined ? null : { ref: { kind: "edge", seg: line.seg }, label: line.label };
   }
 
+  /** On a round face: an END face clicked (flat, square to the axis) while
+   *  the selected hole still needs its distance along -> that face's rim.
+   *  From above, the rim's pick band on the round side is only a sliver. */
+  private endRimRef(hit: SurfaceHit): { ref: HoleRef; label: string } | null {
+    const cyl = this.cyl();
+    const sel = this.selection;
+    if (cyl === null || !this.constrain || sel?.kind !== "hole" || this.locked(sel.i) || this.usedDirs(sel.i).has("u")) return null;
+    const g = hit.body.faces[hit.faceId]?.geom;
+    if (g?.kind !== "plane" || Math.abs(dot(normalize(g.normal), cyl.axis)) < 0.999) return null;
+    const along = cylFromWorld(cyl, surfaceTo3d(hit.frame, hit.raw)).x;
+    const tol = Math.max(1e-6, cyl.radius * 1e-6);
+    const rim = this.faceLines.find((l) => Math.abs(l.seg[0].x - l.seg[1].x) < 1e-9 && Math.abs(l.seg[0].x - along) <= tol);
+    return rim === undefined ? null : { ref: { kind: "edge", seg: rim.seg }, label: rim.label };
+  }
+
   private locked(i: number): boolean {
     return (this.centers[i]?.dims?.length ?? 0) >= 2;
   }
@@ -405,7 +421,7 @@ export class HoleCommand implements ModelCommand {
     }
     const sel = this.selection;
     if (!this.isOurFace(hit)) {
-      const flat = this.flatRef(hit);
+      const flat = this.flatRef(hit) ?? this.endRimRef(hit);
       if (flat !== null && sel?.kind === "hole") this.addDim(sel.i, flat.ref);
       else this.dialog.setError(OTHER_FACE);
       return;
@@ -435,7 +451,7 @@ export class HoleCommand implements ModelCommand {
     let near: { ref: HoleRef; label: string } | null = null;
     const sel = this.selection;
     if (onOurFace && this.constrain && sel?.kind === "hole" && !this.locked(sel.i)) near = this.refNear(hit.raw, sel.i);
-    if (hit !== null && !onOurFace) near = this.flatRef(hit);
+    if (hit !== null && !onOurFace) near = this.flatRef(hit) ?? this.endRimRef(hit);
     this.ctx.view.setHighlightLines(this.frame, near === null ? [] : this.refSegments(near.ref));
     const frame = this.frame ?? hit?.frame ?? null;
     const preview = onOurFace && !this.constrain ? { point: hit.point, snap: hit.snap } : null;

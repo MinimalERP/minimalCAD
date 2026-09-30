@@ -69,11 +69,13 @@ export function boundsOverlap(a: Body, b: Body, tol = 1e-9): boolean {
 /** Spatial-hash vertex welder. */
 class Welder {
   readonly points: Vec3[] = [];
-  private cells = new Map<string, number[]>();
+  private cells = new Map<number, number[]>();
   constructor(private tol: number) {}
 
-  private key(x: number, y: number, z: number): string {
-    return `${x},${y},${z}`;
+  /** Hashed cell key (numbers, not strings: this runs per vertex); a clash
+   *  only puts two cells in one list -- the distance test still decides. */
+  private key(x: number, y: number, z: number): number {
+    return (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) | 0;
   }
 
   index(p: Vec3): number {
@@ -190,13 +192,19 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
   const pts = welder.points;
 
   // 1b. T-junctions: insert any vertex lying on a polygon edge's interior.
+  //     Only an edge without its reverse twin can have one (the far side of
+  //     a T-junction is two shorter edges), so only those are searched.
   const grid = new VertexGrid(pts, Math.max(size / 32, tol * 10));
+  const np = pts.length;
+  const twinned = new Set<number>();
+  for (const p of polys) for (let k = 0; k < p.idx.length; k++) twinned.add(p.idx[k]! * np + p.idx[(k + 1) % p.idx.length]!);
   polys = polys.map((p) => {
     const out: number[] = [];
     for (let k = 0; k < p.idx.length; k++) {
       const ia = p.idx[k]!;
       const ib = p.idx[(k + 1) % p.idx.length]!;
       out.push(ia);
+      if (twinned.has(ib * np + ia)) continue;
       const a = pts[ia]!;
       const b = pts[ib]!;
       const ab = sub(b, a);
@@ -427,10 +435,16 @@ function chainSegments(segs: readonly [number, number][]): number[][] {
 
 /**
  * Re-triangulates every patch of polygons lying in one plane of one face
- * from its boundary loops (outer CCW + holes CW about the normal). Every
- * boundary vertex is kept -- neighbours share them, so the mesh stays
- * watertight -- only interior vertices go. A patch whose outline can't be
- * rebuilt exactly (area check) is left as it was.
+ * from its boundary loops (outer CCW + holes CW about the normal); only
+ * interior vertices go. A patch whose outline can't be rebuilt exactly
+ * (area / outline checks) is left as it was.
+ *
+ * Outline points are shared with the neighbours, so they normally stay (the
+ * mesh must stay watertight) -- except a point in the middle of a straight
+ * run that EVERY polygon / outline through it passes the same way (same two
+ * neighbours): each split plane a boolean used leaves such points on the
+ * long sides of cylinder facets, and they would pile up hole after hole.
+ * Those go from both sides at once.
  */
 function compactPlanarPatches<P extends { idx: number[]; normal: Vec3; faceId: number }>(
   polys: P[],
@@ -448,16 +462,71 @@ function compactPlanarPatches<P extends { idx: number[]; normal: Vec3; faceId: n
     if (g === undefined) groups.set(key, [p]);
     else g.push(p);
   }
-  const out: P[] = [];
+  let patches: { group: P[]; loops: number[][] }[] = [];
+  const raw: P[] = [];
   for (const group of groups.values()) {
-    if (group.length < 3) {
-      out.push(...group);
-      continue;
-    }
-    const redone = retriangulate(group, pts);
-    out.push(...(redone ?? group));
+    const loops = group.length < 3 ? null : patchLoops(group);
+    if (loops === null) raw.push(...group);
+    else patches.push({ group, loops });
   }
-  return out;
+  // A patch that fails keeps its old polygons, whose points must then all
+  // stay (neighbours can't drop them either): pin them and go again.
+  const pinned = new Set<number>();
+  for (;;) {
+    const drop = straightRunPoints([...raw.map((p) => p.idx), ...patches.flatMap((q) => q.loops)], pts, pinned);
+    const keep = (ring: number[]): number[] => (drop.size === 0 ? ring : ring.filter((i) => !drop.has(i)));
+    const out: P[] = [];
+    for (const p of raw) {
+      const idx = keep(p.idx);
+      if (idx.length >= 3) out.push(idx === p.idx ? p : { ...p, idx });
+    }
+    const failed: typeof patches = [];
+    for (const q of patches) {
+      const loops = q.loops.map(keep);
+      const redone = loops.every((l) => l.length >= 3) ? retriangulate(q.group, loops, pts) : null;
+      if (redone === null) failed.push(q);
+      else out.push(...redone);
+    }
+    if (failed.length === 0) return out;
+    for (const q of failed) {
+      raw.push(...q.group);
+      for (const p of q.group) for (const i of p.idx) pinned.add(i);
+    }
+    patches = patches.filter((q) => !failed.includes(q));
+  }
+}
+
+/** Points in the middle of a straight run that every ring through them
+ *  passes between the same two neighbours (see compactPlanarPatches). */
+function straightRunPoints(rings: readonly number[][], pts: readonly Vec3[], pinned: ReadonlySet<number>): Set<number> {
+  const pair = new Map<number, [number, number, number] | null>(); // v -> [u, w, times seen]
+  for (const ring of rings) {
+    for (let k = 0; k < ring.length; k++) {
+      const v = ring[k]!;
+      const a = ring[(k + ring.length - 1) % ring.length]!;
+      const b = ring[(k + 1) % ring.length]!;
+      const [u, w] = a < b ? [a, b] : [b, a];
+      const cur = pair.get(v);
+      if (cur === undefined) pair.set(v, [u, w, 1]);
+      else if (cur !== null) {
+        if (cur[0] === u && cur[1] === w) cur[2]++;
+        else pair.set(v, null);
+      }
+    }
+  }
+  const drop = new Set<number>();
+  for (const [v, uw] of pair) {
+    if (uw === null || uw[2] < 2 || uw[0] === uw[1] || pinned.has(v)) continue;
+    const u = pts[uw[0]]!;
+    const uv = sub(pts[v]!, u);
+    const uw3 = sub(pts[uw[1]]!, u);
+    const len2 = dot(uw3, uw3);
+    const t = dot(uv, uw3) / len2;
+    if (!(t > 1e-9 && t < 1 - 1e-9)) continue;
+    const c = cross(uv, uw3);
+    if (dot(c, c) <= len2 * len2 * 1e-18) drop.add(v);
+  }
+  return drop;
 }
 
 function polygonArea3(idx: readonly number[], pts: readonly Vec3[], n: Vec3): number {
@@ -469,8 +538,8 @@ function polygonArea3(idx: readonly number[], pts: readonly Vec3[], n: Vec3): nu
   return a;
 }
 
-function retriangulate<P extends { idx: number[]; normal: Vec3; faceId: number }>(group: P[], pts: readonly Vec3[]): P[] | null {
-  const n = normalize(group[0]!.normal);
+/** A patch's boundary loops, or null when its outline is pinched / open. */
+function patchLoops(group: readonly { idx: number[] }[]): number[][] | null {
   // Boundary = directed edges whose reverse isn't in the patch.
   const directed = new Set<string>();
   for (const p of group) for (let k = 0; k < p.idx.length; k++) directed.add(`${p.idx[k]}|${p.idx[(k + 1) % p.idx.length]}`);
@@ -506,6 +575,21 @@ function retriangulate<P extends { idx: number[]; normal: Vec3; faceId: number }
     loops.push(loop);
   }
   if (loops.reduce((s, l) => s + l.length, 0) !== boundaryCount) return null;
+  return loops;
+}
+
+/** Fills a patch's (possibly thinned) outline loops with fresh triangles,
+ *  or null when that can't be done exactly. */
+function retriangulate<P extends { idx: number[]; normal: Vec3; faceId: number }>(
+  group: P[],
+  loops: readonly number[][],
+  pts: readonly Vec3[],
+): P[] | null {
+  const n = normalize(group[0]!.normal);
+  const next = new Map<number, number>();
+  for (const l of loops) l.forEach((v, k) => next.set(v, l[(k + 1) % l.length]!));
+  const boundaryCount = loops.reduce((s, l) => s + l.length, 0);
+  if (next.size !== boundaryCount) return null; // thinning made a loop touch itself
 
   // 2D in the patch plane.
   const u = normalize(Math.abs(n.x) < 0.9 ? cross(n, { x: 1, y: 0, z: 0 }) : cross(n, { x: 0, y: 1, z: 0 }));
@@ -599,7 +683,14 @@ function retriangulate<P extends { idx: number[]; normal: Vec3; faceId: number }
     });
     const t = triangulate(flat, holeIdx);
     const fanned: number[][] = [];
-    for (let k = 0; k + 2 < t.length; k += 3) fan(ids[t[k]!]!, ids[t[k + 1]!]!, ids[t[k + 2]!]!, fanned);
+    for (let k = 0; k + 2 < t.length; k += 3) {
+      // triangulate() doesn't keep the input winding: turn each triangle to
+      // the outline's sense (CCW about n) before the checks below.
+      const [a, b, c] = [t[k]!, t[k + 1]!, t[k + 2]!];
+      const turn = (flat[b * 2]! - flat[a * 2]!) * (flat[c * 2 + 1]! - flat[a * 2 + 1]!) - (flat[b * 2 + 1]! - flat[a * 2 + 1]!) * (flat[c * 2]! - flat[a * 2]!);
+      if (turn < 0) fan(ids[b]!, ids[a]!, ids[c]!, fanned);
+      else fan(ids[a]!, ids[b]!, ids[c]!, fanned);
+    }
     for (const idx of fanned) {
       const a = polygonArea3(idx, pts, n);
       if (!(a > 0)) return null; // a flipped or degenerate triangle: not a clean fill
@@ -623,8 +714,7 @@ function retriangulate<P extends { idx: number[]; normal: Vec3; faceId: number }
     if (c !== 1) return null;
     const [a, b] = key.split("|");
     if (count.has(`${b}|${a}`)) continue;
-    const list = next.get(Number(a));
-    if (list === undefined || list[0] !== Number(b)) return null;
+    if (next.get(Number(a)) !== Number(b)) return null;
     outline++;
   }
   if (outline !== boundaryCount) return null;
