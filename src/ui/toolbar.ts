@@ -3,9 +3,9 @@
  * ui/toolbar.ts
  *
  * Icon-only toolbar (ui/toolIcons.ts's procedural glyphs, ported from the
- * desktop app's ui/tool_icons.py), grouped Draw / Modify / Dimension in the
- * same order as the desktop's ui/toolbar.py, followed by non-command
- * utility actions (Undo/Redo/Zoom/Save/Open/DXF). A button's accessible
+ * desktop app's ui/tool_icons.py), grouped Draw / Modify / constraints /
+ * dimensions in the same order as the desktop app. File actions live in the
+ * File menu at the command bar's lower-right corner. A button's accessible
  * name and hover tooltip carry the text label + shortcut that used to be
  * the button's own visible text.
  *
@@ -68,7 +68,7 @@ const DISPLAY_NAMES: Record<string, string> = {
 };
 
 // Matches the desktop app's ui/toolbar.py section order (Draw / Modify /
-// Dimension / File & Library) -- restricted to commands this web port
+// constraints / Dimension) -- restricted to commands this web port
 // actually has; entries the desktop has but this port doesn't yet (table,
 // linetype) are simply absent until their features land, not stubbed.
 const COMMAND_GROUPS: readonly (readonly string[])[] = [
@@ -89,7 +89,6 @@ const COMMAND_GROUPS: readonly (readonly string[])[] = [
   ],
   ["constrain", "horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident"],
   ["linear", "aligned", "angular", "diameter", "radius", "leader"],
-  ["pdfexport", "insertlib", "savelib"],
 ];
 
 /** 2D commands offered while editing a 3D part sketch -- geometry that makes
@@ -147,6 +146,7 @@ function displayName(name: string): string {
  */
 export function buildToolbar(
   root: HTMLElement,
+  commandBarRoot: HTMLElement,
   getActiveEngine: () => Engine,
   requestRedraw: () => void,
   host: ToolbarWorkspaceHost,
@@ -193,10 +193,6 @@ export function buildToolbar(
   drafting.appendChild(gap());
   addUtilityButton(drafting, "zoomextents", "Zoom Extents", () => getActiveEngine().zoomExtents());
   drafting.appendChild(gap());
-  addFileButtons(drafting, getActiveEngine, host);
-  addInsertDrawingButton(drafting, getActiveEngine);
-  drafting.appendChild(gap());
-  addDxfButtons(drafting, getActiveEngine, requestRedraw, host);
 
   // --- 3D model ---
   const model = group(root, "ws-group");
@@ -236,7 +232,6 @@ export function buildToolbar(
     afterUndoRedo();
   });
   model.appendChild(gap());
-  addFileButtons(model, getActiveEngine, host);
 
   // --- Part sketch (2D tools on a sketch plane) ---
   const sketch = group(root, "ws-group");
@@ -271,10 +266,6 @@ export function buildToolbar(
   addUtilityButton(drawing, "redo", "Redo", () => getActiveEngine().redoAction());
   addUtilityButton(drawing, "zoomextents", "Zoom to the sheet", () => host.drawingAction("fit"));
   drawing.appendChild(gap());
-  addUtilityButton(drawing, "pdfexport", "Print to PDF - true size on the sheet's paper (print at 100%)", () =>
-    host.drawingAction("print"),
-  );
-  addFileButtons(drawing, getActiveEngine, host);
 
   // Cloud UI mounts once into its own group (mounting it twice isn't safe).
   const cloud = group(root, "ws-group");
@@ -288,6 +279,8 @@ export function buildToolbar(
   };
   const all = [switcher, sketchBanner, drafting, model, sketch, drawingBanner, drawing, cloud];
 
+  const fileMenu = buildFileMenu(commandBarRoot, getActiveEngine, requestRedraw, host);
+
   function setWorkspace(workspace: Workspace, sketchLabel = "", modelLinked = false): void {
     for (const el of all) el.hidden = !visible[workspace].includes(el);
     finish2dBtn.hidden = !(workspace === "drafting" && modelLinked);
@@ -296,6 +289,7 @@ export function buildToolbar(
     btn2d.classList.toggle("active", workspace === "drafting");
     btn3d.classList.toggle("active", workspace === "model");
     sketchLabelEl.textContent = workspace === "sketch" ? sketchLabel : "";
+    fileMenu.setWorkspace(workspace);
   }
   setWorkspace("drafting");
   return { setWorkspace };
@@ -323,13 +317,83 @@ function addCommandGroups(
   }
 }
 
-function addFileButtons(root: HTMLElement, getActiveEngine: () => Engine, host: ToolbarWorkspaceHost): void {
-  addUtilityButton(root, "save", "Save", () => {
-    const filename = promptFilename("Save Drawing", "jcad");
-    if (filename === null) return;
-    saveDocumentToFile(getActiveEngine().document, filename);
+function buildFileMenu(
+  commandBarRoot: HTMLElement,
+  getActiveEngine: () => Engine,
+  requestRedraw: () => void,
+  host: ToolbarWorkspaceHost,
+): { setWorkspace(workspace: Workspace): void } {
+  const wrapper = document.createElement("div");
+  wrapper.className = "file-menu-wrap";
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "file-menu-trigger";
+  trigger.textContent = "File ▾";
+  trigger.title = "File options";
+  trigger.setAttribute("aria-haspopup", "menu");
+  trigger.setAttribute("aria-expanded", "false");
+  preventFocusSteal(trigger);
+  wrapper.appendChild(trigger);
+
+  const menu = document.createElement("div");
+  menu.className = "file-menu-popover";
+  menu.setAttribute("role", "menu");
+  menu.hidden = true;
+  document.body.appendChild(menu);
+
+  const close = (): void => {
+    menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+  };
+  const position = (): void => {
+    const rect = trigger.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+    menu.style.top = `${Math.max(8, rect.top - menu.offsetHeight - 6)}px`;
+  };
+  trigger.addEventListener("click", () => {
+    if (!menu.hidden) {
+      close();
+      return;
+    }
+    menu.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    position();
   });
-  addUtilityButton(root, "open", "Open", () => {
+  document.addEventListener("pointerdown", (event) => {
+    const target = event.target;
+    if (target instanceof Node && !menu.contains(target) && !wrapper.contains(target)) close();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !menu.hidden) {
+      close();
+      trigger.focus();
+    }
+  });
+  window.addEventListener("resize", () => {
+    if (!menu.hidden) position();
+  });
+
+  const addItem = (label: string, workspaces: Workspace[], onClick: () => void): void => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "file-menu-item";
+    button.textContent = label;
+    button.setAttribute("role", "menuitem");
+    button.dataset.workspaces = workspaces.join(" ");
+    preventFocusSteal(button);
+    button.addEventListener("click", () => {
+      close();
+      onClick();
+    });
+    menu.appendChild(button);
+  };
+
+  const canSaveOpen: Workspace[] = ["drafting", "model", "drawing"];
+  addItem("Save", canSaveOpen, () => {
+    const filename = promptFilename("Save Drawing", "jcad");
+    if (filename !== null) saveDocumentToFile(getActiveEngine().document, filename);
+  });
+  addItem("Open", canSaveOpen, () => {
     void pickAndReadDocumentFile().then((result) => {
       if (result === null) return;
       if (!result.ok) {
@@ -342,15 +406,12 @@ function addFileButtons(root: HTMLElement, getActiveEngine: () => Engine, host: 
       engine.zoomExtents();
       engine.clearCloudDrawing();
       host.documentChanged();
-      if (parseResult.skippedCount > 0) {
-        showToast(`${parseResult.skippedCount} unsupported entity type(s) were skipped.`);
-      }
+      if (parseResult.skippedCount > 0) showToast(`${parseResult.skippedCount} unsupported entity type(s) were skipped.`);
     });
   });
-}
 
-function addInsertDrawingButton(root: HTMLElement, getActiveEngine: () => Engine): void {
-  addUtilityButton(root, "insertdrawing", "Insert Drawing (merge a .jcad file into this canvas)", () => {
+  const draftingOnly: Workspace[] = ["drafting"];
+  addItem("Insert Drawing", draftingOnly, () => {
     void pickAndReadDocumentFile().then((result) => {
       if (result === null) return;
       if (!result.ok) {
@@ -359,51 +420,22 @@ function addInsertDrawingButton(root: HTMLElement, getActiveEngine: () => Engine
       }
       const { entities: incoming, skippedCount } = parseEntities(result.snapshot.entities);
       if (incoming.length === 0) return;
-
       const engine = getActiveEngine();
-
-      // Unlike Open/Import DXF (which replace the document), this merges
-      // into whatever's already on screen -- offset clear of the existing
-      // content's bounds so it doesn't land on top of it, matching the
-      // desktop app's own Ctrl+A overlay-import (document.py's
-      // placeBeside()). Deliberately does NOT call engine.clearCloudDrawing():
-      // the current drawing's identity hasn't changed, it just has more in it.
-      if (engine.document.getEntities().length > 0) {
-        placeBeside(engine.document.getBounds(), incoming);
-      }
-
+      if (engine.document.getEntities().length > 0) placeBeside(engine.document.getBounds(), incoming);
       engine.undo.push(engine.document.toDict());
       for (const entity of incoming) engine.document.addEntity(entity);
       engine.selection.clear();
       engine.zoomExtents();
-      if (skippedCount > 0) {
-        showToast(`${skippedCount} unsupported entity type(s) were skipped.`);
-      }
+      if (skippedCount > 0) showToast(`${skippedCount} unsupported entity type(s) were skipped.`);
     });
   });
-}
-
-function addDxfButtons(
-  root: HTMLElement,
-  getActiveEngine: () => Engine,
-  requestRedraw: () => void,
-  host: ToolbarWorkspaceHost,
-): void {
-  addUtilityButton(root, "exportdxf", "Export DXF", () => {
-    const filename = promptFilename("Export DXF", "dxf");
-    if (filename === null) return;
-    exportDxfToFile(getActiveEngine().document, filename);
-  });
-  addUtilityButton(root, "importdxf", "Import DXF", () => {
+  addItem("Import DXF", draftingOnly, () => {
     void pickAndReadDxfFile().then((result) => {
       if (result === null) {
         showToast("Could not open file: not a valid DXF file");
         return;
       }
       const engine = getActiveEngine();
-      // Matches Open's full-replace semantics (and the desktop app's own
-      // import_dxf(), which repopulates document.entities in place) rather
-      // than merging into whatever's currently on screen.
       engine.document.clear();
       for (const entity of result.entities) engine.document.addEntity(entity);
       engine.undo.clear();
@@ -411,11 +443,29 @@ function addDxfButtons(
       engine.clearCloudDrawing();
       host.documentChanged();
       requestRedraw();
-      if (result.warnings.length > 0) {
-        showToast(result.warnings.join(" — "), 8000);
-      }
+      if (result.warnings.length > 0) showToast(result.warnings.join(" — "), 8000);
     });
   });
+  addItem("Export DXF", draftingOnly, () => {
+    const filename = promptFilename("Export DXF", "dxf");
+    if (filename !== null) exportDxfToFile(getActiveEngine().document, filename);
+  });
+  addItem("Export PDF", draftingOnly, () => getActiveEngine().commandManager.startCommand("pdfexport"));
+  addItem("Insert from Library", draftingOnly, () => getActiveEngine().commandManager.startCommand("insertlib"));
+  addItem("Save to Library", draftingOnly, () => getActiveEngine().commandManager.startCommand("savelib"));
+  addItem("Print Drawing to PDF", ["drawing"], () => host.drawingAction("print"));
+
+  commandBarRoot.appendChild(wrapper); // placed after ORTHO at the bottom-right
+  return {
+    setWorkspace: (workspace) => {
+      for (const button of menu.querySelectorAll<HTMLButtonElement>(".file-menu-item")) {
+        button.hidden = !button.dataset.workspaces?.split(" ").includes(workspace);
+      }
+      const available = [...menu.querySelectorAll<HTMLButtonElement>(".file-menu-item")].some((button) => !button.hidden);
+      wrapper.hidden = !available;
+      close();
+    },
+  };
 }
 
 /** Builds an icon-only <button> (ui/toolIcons.ts glyph inside, no visible

@@ -18,7 +18,7 @@
 export type OverlayMode = "all" | "selected" | "off";
 
 const KEY = "minimalcad.overlayMode";
-const ORDER: readonly OverlayMode[] = ["all", "selected", "off"];
+const ORDER: readonly OverlayMode[] = ["selected", "all", "off"];
 
 function load(): OverlayMode {
   try {
@@ -27,7 +27,7 @@ function load(): OverlayMode {
   } catch {
     // Storage blocked (private window): just use the default.
   }
-  return "all";
+  return "selected";
 }
 
 let mode: OverlayMode = load();
@@ -45,7 +45,7 @@ export function setOverlayMode(next: OverlayMode): void {
   }
 }
 
-/** Steps ALL -> SEL -> OFF -> ALL; returns the new mode. */
+/** Steps SEL -> ALL -> OFF -> SEL; returns the new mode. */
 export function cycleOverlayMode(): OverlayMode {
   setOverlayMode(ORDER[(ORDER.indexOf(mode) + 1) % ORDER.length]!);
   return mode;

@@ -191,7 +191,7 @@ showOverlayMode();
 // against it. The ResizeObserver in canvasView.ts's constructor is the
 // actual belt-and-braces fix for any *later* layout-driven size change;
 // this ordering just makes sure the very first sizing is already correct.
-workspace.attachToolbar(buildToolbar(toolbarEl, getActiveEngine, () => view.requestRedraw(), workspace));
+workspace.attachToolbar(buildToolbar(toolbarEl, commandBarEl, getActiveEngine, () => view.requestRedraw(), workspace));
 
 view = new CanvasView(canvasEl, firstSession.viewport, firstSession.engine);
 

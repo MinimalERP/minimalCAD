@@ -51,15 +51,10 @@ body {
   padding: 4px 8px;
   background: #252526;
   border-bottom: 1px solid #3c3c3c;
-  /* With enough commands registered, this doesn't fit one row on a
-     narrow/tablet-width screen -- scrolls horizontally instead of wrapping
-     to a second row (wrapping's own multi-row height was hard to predict
-     reliably across the wide range of screen widths/pointer types this
-     needs to work on -- see the removed any-pointer/pointer-based sizing
-     overrides this replaced). canvasView.ts's ResizeObserver re-syncs the
-     canvas off the canvas element's own box, not #toolbar's height
-     specifically, so a fixed single-row height here doesn't need any
-     separate wiring either. */
+  /* The toolbar moves trailing buttons into its More menu as space runs
+     out. Horizontal scrolling remains a fallback at widths too small for
+     even the workspace switcher and More button. Keeping one row also
+     keeps canvas sizing predictable across pointer types. */
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch; /* momentum scrolling on iOS */
@@ -807,6 +802,65 @@ body {
 #toolbar button.ws-btn.active {
   background: #0e639c;
   color: #ffffff;
+}
+#command-bar .file-menu-wrap[hidden],
+.file-menu-popover[hidden] {
+  display: none;
+}
+#command-bar .file-menu-wrap {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+#command-bar .file-menu-trigger {
+  padding: 2px 8px;
+  color: #d4d4d4;
+  background: #2d2d30;
+  border: 1px solid #3c3c3c;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+#command-bar .file-menu-trigger:hover,
+#command-bar .file-menu-trigger:focus-visible {
+  background: #3c3c3c;
+  outline: none;
+}
+.file-menu-popover {
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  max-width: min(300px, calc(100vw - 16px));
+  max-height: min(70vh, 560px);
+  overflow: auto;
+  padding: 4px;
+  color: #d4d4d4;
+  background: #252526;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+.file-menu-popover .file-menu-item {
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 9px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  text-align: left;
+  font: inherit;
+  font-weight: 400;
+  cursor: pointer;
+}
+.file-menu-popover .file-menu-item:hover,
+.file-menu-popover .file-menu-item:focus-visible {
+  background: #3c3c3c;
+  outline: none;
 }
 #toolbar button.finish-sketch {
   background: #2e7d32;
