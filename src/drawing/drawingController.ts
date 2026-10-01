@@ -59,8 +59,8 @@ export interface DrawingHost {
   requestRedraw(): void;
 }
 
-const SCREEN: PaintStyle = { paper: "#2b2f36", ink: "#e6e6e6", minWidth: 0.8, shade: (s) => shadeColor([176, 188, 204], s) };
-const PREVIEW: PaintStyle = { paper: null, ink: "#5aa0ff", minWidth: 1, shade: (s) => shadeColor([60, 110, 180], s) };
+const SCREEN: PaintStyle = { paper: "#2b2f36", ink: "#e6e6e6", minWidth: 0.8, maxWeightZoom: 3, shade: (s) => shadeColor([176, 188, 204], s) };
+const PREVIEW: PaintStyle = { paper: null, ink: "#5aa0ff", minWidth: 1, maxWeightZoom: 3, shade: (s) => shadeColor([60, 110, 180], s) };
 /** Paper: black ink, shaded faces in light greys (prints well in mono). */
 const PRINT: PaintStyle = { paper: null, ink: "#000", minWidth: 0, shade: (s) => shadeColor([236, 238, 242], 0.35 + 0.65 * s) };
 

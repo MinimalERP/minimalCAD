@@ -670,6 +670,9 @@ export interface PaintStyle {
   ink: string;
   /** Minimum drawn width (screen px) so thin pens stay visible zoomed out. */
   minWidth: number;
+  /** Zoom (px per mm) past which weights stop growing: on screen, lines stay
+   *  thin when zoomed in. Omitted = true weights at any zoom (print). */
+  maxWeightZoom?: number;
   /** Fill colour of a shaded view's face at shade 0..1. */
   shade(s: number): string;
 }
@@ -703,7 +706,7 @@ export function paintSheet(
   const pen = (p: Pen): void => {
     if (p === lastPen) return;
     lastPen = p;
-    ctx.lineWidth = Math.max(style.minWidth, PENS[p].w * z);
+    ctx.lineWidth = Math.max(style.minWidth, PENS[p].w * Math.min(z, style.maxWeightZoom ?? Infinity));
     ctx.setLineDash(PENS[p].dash.map((d) => d * z));
   };
   for (const p of g.prims) {
