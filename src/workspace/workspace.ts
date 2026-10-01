@@ -45,6 +45,7 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
   private toolbar: ToolbarHandle | null = null;
   private model: ModelController | null = null;
   private modelLoading: Promise<ModelController> | null = null;
+  private modelModule: Promise<typeof import("../view3d/modelController")> | null = null;
   /** One sheet controller per drawing tab (the module loads on first use). */
   private drawings = new Map<string, DrawingController>();
   private drawingModule: Promise<typeof import("../drawing/drawingController")> | null = null;
@@ -62,6 +63,11 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
 
   isModel(): boolean {
     return this.deps.getSession().workspace === "model";
+  }
+
+  /** Start loading the 3D module as soon as the user signals intent to switch. */
+  prepareModel(): void {
+    this.modelModule ??= import("../view3d/modelController");
   }
 
   // --- ToolbarWorkspaceHost ---
@@ -295,7 +301,8 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
 
   private loadModel(): Promise<ModelController> {
     if (this.model !== null) return Promise.resolve(this.model);
-    this.modelLoading ??= import("../view3d/modelController").then((mod) => {
+    this.modelModule ??= import("../view3d/modelController");
+    this.modelLoading ??= this.modelModule.then((mod) => {
       this.model = new mod.ModelController(this.deps.glCanvasEl, this.deps.browserEl, {
         commandBar: this.deps.commandBar,
         getEngine: () => this.deps.getSession().engine,

@@ -118,6 +118,7 @@ const DRAWING_GROUPS: readonly (readonly string[])[] = [
  *  interface so this module never imports any 3D code. */
 export interface ToolbarWorkspaceHost {
   switchTo(workspace: "drafting" | "model"): void;
+  prepareModel(): void;
   finishSketch(): void;
   /** Leave 2D editing of a drawing that belongs to a 3D model. */
   finish2d(): void;
@@ -156,6 +157,10 @@ export function buildToolbar(
   const switcher = group(root, "ws-switcher");
   const btn2d = textButton(switcher, "2D", "2D drafting workspace", () => host.switchTo("drafting"));
   const btn3d = textButton(switcher, "3D", "3D view of the same model (orbit, extrude...)", () => host.switchTo("model"));
+  // Download and evaluate the lazy 3D bundle on hover/focus so the first
+  // click doesn't have to wait for the network and module initialization.
+  btn3d.addEventListener("pointerenter", () => host.prepareModel(), { once: true });
+  btn3d.addEventListener("focus", () => host.prepareModel(), { once: true });
   const finish2dBtn = textButton(switcher, "✓ Finish 2D", "Finish editing the 2D drawing and return to 3D", () =>
     host.finish2d(),
   );

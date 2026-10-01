@@ -415,7 +415,12 @@ export class ModelController {
       r.addEventListener("click", () => {
         if (this.active?.onTreePick?.(id) === true) return;
         this.selectedNode = id;
-        this.renderBrowser(this.part());
+        // Keep this row mounted between the two clicks of a double-click.
+        // Rebuilding the tree here removes the target after the first click,
+        // so Firefox never dispatches `dblclick` and feature editing cannot open.
+        for (const item of el.querySelectorAll<HTMLElement>(".mb-row")) {
+          item.classList.toggle("selected", item === r);
+        }
         this.view.canvas.focus();
       });
       r.addEventListener("dblclick", onOpen);

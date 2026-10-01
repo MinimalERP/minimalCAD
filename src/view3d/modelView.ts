@@ -232,7 +232,9 @@ export class ModelView {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    // High-DPI displays can otherwise multiply the first WebGL frame by 4x
+    // or more. 1.5x keeps the CAD edges crisp while reducing startup/GPU cost.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.scene.background = new THREE.Color(BG);
 
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100000);
