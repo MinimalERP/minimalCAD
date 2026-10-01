@@ -441,6 +441,23 @@ function drawExtrude(ctx: CanvasRenderingContext2D): void {
   arrowhead(ctx, 8, 1, -90);
 }
 
+function drawRevolve(ctx: CanvasRenderingContext2D): void {
+  // a turned profile (half a vase) beside its dashed axis, and the turn arrow
+  dashed(ctx, () => line(ctx, 6, 1, 6, 19));
+  ctx.beginPath();
+  ctx.moveTo(6, 4);
+  ctx.lineTo(12, 4);
+  ctx.lineTo(12, 8);
+  ctx.lineTo(16, 12);
+  ctx.lineTo(16, 16);
+  ctx.lineTo(6, 16);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(6, 10, 4.5, 1.8, 0, Math.PI * 0.55, Math.PI * 1.9);
+  ctx.stroke();
+  arrowhead(ctx, 10.2, 9.4, 70);
+}
+
 function drawHole(ctx: CanvasRenderingContext2D): void {
   // block with a drilled hole seen at an angle, and the drill axis
   ctx.beginPath();
@@ -554,6 +571,7 @@ const DRAWERS: Record<string, Drawer> = {
   newsketch: drawNewSketch,
   finishsketch: drawFinishSketch,
   extrude: drawExtrude,
+  revolve: drawRevolve,
   workplane: drawWorkPlane,
   hole: drawHole,
   viewfront: viewCube("front"),

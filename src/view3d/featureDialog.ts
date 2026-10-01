@@ -32,6 +32,8 @@ export interface ChoiceHandle<T extends string> {
 export interface SelectionHandle {
   /** `done` styles it as satisfied (green) vs still needed (amber). */
   set(text: string, done: boolean): void;
+  /** Marks it as the one the view is picking for right now. */
+  setActive(active: boolean): void;
 }
 
 export class FeatureDialog {
@@ -101,17 +103,25 @@ export class FeatureDialog {
     return { row, slot };
   }
 
-  /** A "what to click" status line, e.g. "Profile: 2 selected". */
-  selection(label: string, text: string, done = false): SelectionHandle {
+  /** A "what to click" status line, e.g. "Profile: 2 selected". With
+   *  `onClick` it is also a button: click it to pick for that row again. */
+  selection(label: string, text: string, done = false, onClick?: () => void): SelectionHandle {
     const { slot } = this.row(label);
     const s = document.createElement("div");
     s.className = "fd-selection";
+    if (onClick !== undefined) {
+      s.classList.add("clickable");
+      s.title = `Click to pick the ${label.toLowerCase()}`;
+      s.addEventListener("mousedown", (e) => e.preventDefault());
+      s.addEventListener("click", onClick);
+    }
     slot.appendChild(s);
     const handle: SelectionHandle = {
       set: (t, d) => {
         s.textContent = t;
         s.classList.toggle("done", d);
       },
+      setActive: (a) => s.classList.toggle("active", a),
     };
     handle.set(text, done);
     return handle;
@@ -292,6 +302,8 @@ export const ICONS = {
   holeSimple: svg('<path d="M2 4 H7 V17 H13 V4 H18" /><line x1="10" y1="1" x2="10" y2="19" stroke-dasharray="1.5 1.5"/>'),
   holeCbore: svg('<path d="M1 4 H5 V9 H7 V17 H13 V9 H15 V4 H19"/><line x1="10" y1="1" x2="10" y2="19" stroke-dasharray="1.5 1.5"/>'),
   holeCsink: svg('<path d="M1 4 H4 L7 8 V17 H13 V8 L16 4 H19"/><line x1="10" y1="1" x2="10" y2="19" stroke-dasharray="1.5 1.5"/>'),
+  revFull: svg('<line x1="10" y1="1" x2="10" y2="19" stroke-dasharray="1.5 1.5"/><ellipse cx="10" cy="10" rx="7.5" ry="3.2"/><path d="M15.5 14.2 L17.4 11.6 L14.2 11.2"/>'),
+  revAngle: svg('<line x1="10" y1="1" x2="10" y2="19" stroke-dasharray="1.5 1.5"/><path d="M10 10 L17.5 10 A7.5 3.2 0 0 1 10 13.2 Z" fill="currentColor" fill-opacity="0.35"/><path d="M10 10 L4 7"/>'),
   axisU: svg('<line x1="2" y1="14" x2="18" y2="14"/><path d="M15 11 L18 14 L15 17"/><path d="M6 5 A6 4 0 0 1 14 5" /><path d="M13 3 L14 5 L12 6"/>'),
   axisV: svg('<line x1="6" y1="18" x2="6" y2="2"/><path d="M3 5 L6 2 L9 5"/><path d="M11 6 A4 6 0 0 1 11 14"/><path d="M13 13 L11 14 L10 12"/>'),
 };

@@ -9,6 +9,12 @@
 
 import { parseEntities } from "../core/document";
 import { extrudeRegions } from "./kernel/extrude";
+import { revolveRegions } from "./kernel/revolveRegion";
+import type { AxisLine } from "./kernel/revolveRegion";
+import type { Point } from "../core/types";
+import { Line } from "../entities/line";
+import { Polyline } from "../entities/polyline";
+import type { Entity } from "../entities/entity";
 import { subtract, union } from "./kernel/csg";
 import { bodyBounds, bodyToPolygons, boundsOverlap, polygonsToBody } from "./kernel/brep";
 import type { Body, TopoRef } from "./kernel/types";
@@ -21,7 +27,7 @@ import { faceFrame, offsetFrame, planeFrame, toLocal, workPlaneFrame } from "./p
 import type { Frame } from "./plane";
 import { findProfiles, regionContains } from "./profile";
 import type { ProfileResult, Region } from "./profile";
-import type { EdgeFeature, ExtrudeFeature, HoleFeature, PartData, PlaneRef, SketchData } from "./types";
+import type { EdgeFeature, ExtrudeFeature, HoleFeature, PartData, PlaneRef, RevolveAxis, RevolveFeature, SketchData } from "./types";
 import { isEdgeFeature } from "./types";
 import { edgeTools } from "./edgeBlend";
 import { holeTools } from "./hole";
@@ -42,6 +48,8 @@ export interface SketchGeometry {
   sketch: SketchData;
   frame: Frame;
   profiles: ProfileResult;
+  /** Every straight line of the sketch (plane-local): Revolve axis candidates. */
+  lines: [Point, Point][];
 }
 
 export interface RebuildResult {
@@ -52,9 +60,54 @@ export interface RebuildResult {
   params: Map<string, number>;
 }
 
+/** The straight lines among `entities` (polyline sides included), plane-local. */
+export function sketchLines(entities: readonly Entity[]): [Point, Point][] {
+  const out: [Point, Point][] = [];
+  const push = (l: Line): void => {
+    if (Math.hypot(l.endPoint.x - l.startPoint.x, l.endPoint.y - l.startPoint.y) > 0) out.push([toLocal(l.startPoint), toLocal(l.endPoint)]);
+  };
+  for (const e of entities) {
+    if (e instanceof Line) push(e);
+    else if (e instanceof Polyline) for (const seg of e.segmentEntities()) if (seg instanceof Line) push(seg);
+  }
+  return out;
+}
+
 export function sketchGeometry(sketch: SketchData, frame: Frame): SketchGeometry {
   const { entities } = parseEntities(sketch.entities);
-  return { sketch, frame, profiles: findProfiles(entities) };
+  return { sketch, frame, profiles: findProfiles(entities), lines: sketchLines(entities) };
+}
+
+/**
+ * A Revolve's axis as a plane-local line. A picked sketch line is stored by
+ * its two ends; if a 2D edit moved that line (nothing of the sketch lies
+ * along the stored one any more), the axis follows it: the nearest line of
+ * the same length.
+ */
+export function resolveRevolveAxis(axis: RevolveAxis, lines: readonly [Point, Point][]): AxisLine {
+  if (axis.kind === "u") return { a: { x: 0, y: 0 }, b: { x: 1, y: 0 } };
+  if (axis.kind === "v") return { a: { x: 0, y: 0 }, b: { x: 0, y: 1 } };
+  const a = toLocal(axis.a);
+  const b = toLocal(axis.b);
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  if (!(len > 0)) return { a, b };
+  const off = (p: Point): number => Math.abs((p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)) / len;
+  const tol = len * 1e-6;
+  if (lines.some(([p, q]) => off(p) <= tol && off(q) <= tol)) return { a, b };
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const moved = lines
+    .filter(([p, q]) => Math.abs(Math.hypot(q.x - p.x, q.y - p.y) - len) <= len * 0.02)
+    .map(([p, q]) => ({ p, q, d: Math.hypot((p.x + q.x) / 2 - mid.x, (p.y + q.y) / 2 - mid.y) }))
+    .sort((x, y) => x.d - y.d)[0];
+  return moved === undefined ? { a, b } : { a: moved.p, b: moved.q };
+}
+
+/** A Revolve's sweep [t0, t1] in radians, or null if its angle is invalid. */
+export function revolveSweep(feature: Pick<RevolveFeature, "extent" | "angle" | "direction">, params: ReadonlyMap<string, number>): [number, number] | null {
+  if (feature.extent !== "angle") return [0, 2 * Math.PI];
+  const deg = evalExpression(feature.angle, params);
+  if (deg === null || !(deg > 0) || deg > 360) return null;
+  return extrudeExtent(feature.direction, (deg * Math.PI) / 180);
 }
 
 export function resolveWorkPlanes(part: PartData, params: ReadonlyMap<string, number>): Map<string, WorkPlaneGeometry> {
@@ -319,21 +372,31 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
       status.set(feature.id, { ok: false, error: `Sketch ${feature.sketch} is missing or its plane is broken` });
       continue;
     }
-    const through = feature.extent === "through";
-    const distance = through ? throughLength(bodies, geo.frame) : evalExpression(feature.distance, params);
-    if (distance === null || !(distance > 0)) {
-      status.set(feature.id, { ok: false, error: `Invalid distance "${feature.distance}"` });
-      continue;
-    }
     const regions = selectRegions(geo.profiles.regions, feature.profiles);
     if (regions.length === 0) {
       status.set(feature.id, {
         ok: false,
         error:
           feature.profiles === "all" || feature.profiles.length === 0
-            ? "No closed profile to extrude"
+            ? `No closed profile to ${feature.type}`
             : "Profile not found - the shape was deleted or opened up",
       });
+      continue;
+    }
+    if (feature.type === "revolve") {
+      const sweep = revolveSweep(feature, params);
+      if (sweep === null) {
+        status.set(feature.id, { ok: false, error: `Invalid angle "${feature.angle}" - use more than 0, up to 360` });
+        continue;
+      }
+      const tool = revolveRegions(feature.id, regions, geo.frame, resolveRevolveAxis(feature.axis, geo.lines), sweep[0], sweep[1]);
+      status.set(feature.id, typeof tool === "string" ? { ok: false, error: tool } : applyOperation(bodies, tool, feature.operation));
+      continue;
+    }
+    const through = feature.extent === "through";
+    const distance = through ? throughLength(bodies, geo.frame) : evalExpression(feature.distance, params);
+    if (distance === null || !(distance > 0)) {
+      status.set(feature.id, { ok: false, error: `Invalid distance "${feature.distance}"` });
       continue;
     }
     // Through all: the tool reaches past the model in the chosen direction(s).

@@ -34,7 +34,7 @@ class MeshBuilder {
   }
 }
 
-function tangentOut(s: Segment): Point {
+export function tangentOut(s: Segment): Point {
   if (s.kind === "line") return { x: s.b.x - s.a.x, y: s.b.y - s.a.y };
   if (s.kind === "arc") {
     const d = Math.sign(s.sweep);
@@ -43,7 +43,7 @@ function tangentOut(s: Segment): Point {
   return { x: s.pts[1]!.x - s.pts[0]!.x, y: s.pts[1]!.y - s.pts[0]!.y };
 }
 
-function tangentIn(s: Segment): Point {
+export function tangentIn(s: Segment): Point {
   if (s.kind === "line") return { x: s.b.x - s.a.x, y: s.b.y - s.a.y };
   if (s.kind === "arc") {
     const a = s.a0 + s.sweep;
@@ -54,7 +54,7 @@ function tangentIn(s: Segment): Point {
   return { x: s.pts[n - 1]!.x - s.pts[n - 2]!.x, y: s.pts[n - 1]!.y - s.pts[n - 2]!.y };
 }
 
-function isTangent(a: Point, b: Point): boolean {
+export function isTangent(a: Point, b: Point): boolean {
   const la = Math.hypot(a.x, a.y);
   const lb = Math.hypot(b.x, b.y);
   if (la === 0 || lb === 0) return true;

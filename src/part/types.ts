@@ -85,6 +85,29 @@ export interface ExtrudeFeature {
   suppressed?: boolean;
 }
 
+/** What a Revolve turns about, in its sketch's own coordinates (Y-down, as
+ *  stored): the sketch's horizontal ("u") or vertical ("v") axis through
+ *  its origin, or a straight line of the sketch (kept as its two ends --
+ *  rebuild.ts re-finds the line if a 2D edit moved it). */
+export type RevolveAxis = { kind: "u" } | { kind: "v" } | { kind: "line"; a: Point; b: Point };
+
+export interface RevolveFeature {
+  id: string;
+  type: "revolve";
+  sketch: string;
+  /** As ExtrudeFeature.profiles. */
+  profiles: "all" | ProfileSeed[];
+  axis: RevolveAxis;
+  /** Absent = a full turn. */
+  extent?: "angle";
+  /** Expression, degrees (used when extent is "angle"). */
+  angle: string;
+  /** Which way a partial turn goes from the sketch plane. */
+  direction: ExtrudeDirection;
+  operation: FeatureOperation;
+  suppressed?: boolean;
+}
+
 export type HoleStyle = "plain" | "counterbore" | "countersink";
 
 /** What a hole centre is dimensioned from (all in face plane coordinates):
@@ -171,7 +194,12 @@ export interface EdgeFeature {
   suppressed?: boolean;
 }
 
-export type FeatureData = ExtrudeFeature | HoleFeature | EdgeFeature;
+export type FeatureData = ExtrudeFeature | RevolveFeature | HoleFeature | EdgeFeature;
+
+/** Features built from a sketch's closed shapes. */
+export type SketchFeature = ExtrudeFeature | RevolveFeature;
+
+export const usesSketch = (f: FeatureData): f is SketchFeature => f.type === "extrude" || f.type === "revolve";
 
 export const isEdgeFeature = (f: FeatureData): f is EdgeFeature => f.type === "fillet" || f.type === "chamfer";
 
@@ -321,6 +349,23 @@ function parseFeature(raw: unknown): FeatureData | null {
       if (v !== undefined) hole[key] = v;
     }
     return hole;
+  }
+  if (raw.type === "revolve" && typeof raw.sketch === "string") {
+    const ax = isObject(raw.axis) ? raw.axis : {};
+    const seg = ax.kind === "line" ? parseSegment([ax.a, ax.b]) : null;
+    const axis: RevolveAxis = seg !== null ? { kind: "line", a: seg[0], b: seg[1] } : ax.kind === "v" ? { kind: "v" } : { kind: "u" };
+    return {
+      id: raw.id,
+      type: "revolve",
+      sketch: raw.sketch,
+      profiles: Array.isArray(raw.profiles) ? raw.profiles.map(parseSeed).filter((p): p is ProfileSeed => p !== null) : "all",
+      axis,
+      ...(raw.extent === "angle" ? { extent: "angle" as const } : {}),
+      angle: typeof raw.angle === "number" ? String(raw.angle) : String(raw.angle ?? "90"),
+      direction: raw.direction === "reverse" || raw.direction === "symmetric" ? raw.direction : "normal",
+      operation: raw.operation === "join" || raw.operation === "cut" ? raw.operation : "new",
+      suppressed: raw.suppressed === true,
+    };
   }
   if (raw.type === "extrude" && typeof raw.sketch === "string") {
     const profiles = Array.isArray(raw.profiles)

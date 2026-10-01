@@ -1049,6 +1049,12 @@ body[data-workspace="drawing"] #gl-canvas[hidden] ~ .feature-dialog {
   background: rgba(232, 176, 74, 0.15);
   color: #e8b04a;
 }
+.feature-dialog .fd-selection.clickable {
+  cursor: pointer;
+}
+.feature-dialog .fd-selection.active {
+  outline: 1px solid #5aa0ff;
+}
 .feature-dialog .fd-selection.done {
   background: rgba(76, 175, 80, 0.15);
   color: #7fd07f;

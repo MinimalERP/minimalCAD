@@ -26,7 +26,7 @@ import { parseEntities } from "../core/document";
 import type { Point } from "../core/types";
 import type { Entity } from "../entities/entity";
 import type { HoleFeature, PartData, PlaneRef } from "../part/types";
-import { DRAWING_SKETCH, emptyPart, isEdgeFeature, isExtrude, nextId, parsePart } from "../part/types";
+import { DRAWING_SKETCH, emptyPart, isEdgeFeature, nextId, parsePart, usesSketch } from "../part/types";
 import { rebuild, resolvePlane } from "../part/rebuild";
 import type { RebuildResult } from "../part/rebuild";
 import { projectBodies } from "../part/project";
@@ -37,6 +37,7 @@ import { entityPolylines } from "../part/profile";
 import { ModelView } from "./modelView";
 import type { ModelCommand, ModelContext } from "./commands/context";
 import { ExtrudeCommand } from "./commands/extrudeCommand";
+import { RevolveCommand } from "./commands/revolveCommand";
 import { HoleCommand } from "./commands/holeCommand";
 import { EdgeBlendCommand } from "./commands/edgeBlendCommand";
 import { WorkPlaneCommand, planeAxes } from "./commands/workPlaneCommand";
@@ -164,7 +165,7 @@ export class ModelController {
   /** The 2D drawing is always shown on the XY ground (it IS the model
    *  space); other sketches only until a feature consumes them. */
   private showWireframes(part: PartData, alsoShow: ReadonlySet<string> = new Set()): void {
-    const used = new Set(part.features.filter(isExtrude).map((f) => f.sketch));
+    const used = new Set(part.features.filter(usesSketch).map((f) => f.sketch));
     const list: { frame: Frame; polylines: Point[][] }[] = [];
     const drawing = this.result?.sketches.get(DRAWING_SKETCH);
     if (drawing !== undefined) {
@@ -210,6 +211,8 @@ export class ModelController {
         return this.run(() => new WorkPlaneCommand(this.ctx, null));
       case "extrude":
         return this.run(() => ExtrudeCommand.start(this.ctx, null));
+      case "revolve":
+        return this.run(() => RevolveCommand.start(this.ctx, null));
       case "hole":
         return this.run(() => HoleCommand.start(this.ctx, null));
       case "fillet":
@@ -254,12 +257,13 @@ export class ModelController {
       return;
     }
     if (["e", "ext", "extrude"].includes(t)) this.action("extrude");
+    else if (["r", "rev", "revolve"].includes(t)) this.action("revolve");
     else if (["h", "hole"].includes(t)) this.action("hole");
     else if (["f", "fillet"].includes(t)) this.action("fillet");
     else if (["ch", "cha", "chamfer"].includes(t)) this.action("chamfer");
     else if (["s", "sk", "sketch"].includes(t)) this.action("newsketch");
     else if (["wp", "plane", "workplane", "ucs"].includes(t)) this.action("workplane");
-    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), H (hole), F (fillet), CH (chamfer), S (sketch), WP`);
+    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), S (sketch), WP`);
   }
 
   escape(): void {
@@ -320,13 +324,14 @@ export class ModelController {
     if (f === undefined) return;
     if (f.type === "hole") this.run(() => HoleCommand.start(this.ctx, f));
     else if (isEdgeFeature(f)) this.run(() => EdgeBlendCommand.start(this.ctx, f.type, f));
+    else if (f.type === "revolve") this.run(() => RevolveCommand.start(this.ctx, f));
     else this.run(() => ExtrudeCommand.start(this.ctx, f));
   }
 
   private deleteNode(id: string): void {
     const part = this.part();
     if (id === DRAWING_SKETCH) return;
-    if (part.features.some((f) => isExtrude(f) && f.sketch === id)) {
+    if (part.features.some((f) => usesSketch(f) && f.sketch === id)) {
       showToast(`${id} is used by a feature - delete the feature first.`);
       return;
     }
@@ -436,6 +441,12 @@ export class ModelController {
         continue;
       }
       sketchRow(f.sketch);
+      if (f.type === "revolve") {
+        const deg = evalExpression(f.angle, this.params());
+        const turn = f.extent !== "angle" ? "360°" : deg === null ? f.angle : `${+deg.toFixed(3)}°`;
+        row(f.id, f.id, `${OPERATION_LABEL[f.operation]} ${turn}${f.sketch === DRAWING_SKETCH ? " (2D)" : ""}`, "◐", () => this.editFeature(f.id), { error });
+        continue;
+      }
       const value = evalExpression(f.distance, this.params());
       const amount = f.extent === "through" ? "through all" : value === null ? f.distance : `${+value.toFixed(3)} mm`;
       const from = f.sketch === DRAWING_SKETCH ? " (2D)" : "";

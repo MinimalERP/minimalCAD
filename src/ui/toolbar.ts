@@ -96,7 +96,7 @@ const SKETCH_GROUPS: readonly (readonly string[])[] = [
 ];
 
 /** 3D-workspace actions (handled by the lazily-loaded model module). */
-export type ModelAction = "newsketch" | "workplane" | "extrude" | "hole" | "fillet" | "chamfer" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
+export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "fillet" | "chamfer" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
 
 /** Drawing-tab actions (handled by the lazily-loaded drawing module). */
 export type DrawingToolAction = "sheet" | "baseview" | "projview" | "moveview" | "editview" | "deleteview" | "print" | "fit";
@@ -195,6 +195,7 @@ export function buildToolbar(
     host.modelAction("workplane"),
   );
   addUtilityButton(model, "extrude", "Extrude", () => host.modelAction("extrude"));
+  addUtilityButton(model, "revolve", "Revolve (R) - spin a closed shape round an axis line", () => host.modelAction("revolve"));
   addUtilityButton(model, "hole", "Hole (H) - click a face, place centres, set Ø / depth / c'bore / c'sink", () =>
     host.modelAction("hole"),
   );

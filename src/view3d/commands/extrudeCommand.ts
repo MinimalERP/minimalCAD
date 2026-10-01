@@ -8,7 +8,7 @@
  */
 
 import type { ExtrudeDirection, ExtrudeFeature, FeatureOperation } from "../../part/types";
-import { DRAWING_SKETCH, isExtrude, nextId } from "../../part/types";
+import { DRAWING_SKETCH, isExtrude, nextId, usesSketch } from "../../part/types";
 import { extrudeExtent, selectRegions, throughLength } from "../../part/rebuild";
 import { extrudeRegions } from "../../part/kernel/extrude";
 import { regionContains, regionSeed } from "../../part/profile";
@@ -142,7 +142,7 @@ export class ExtrudeCommand implements ModelCommand {
     const all = ExtrudeCommand.allRegions(this.ctx);
     const consumed = (r: PickableRegion): boolean =>
       part.features
-        .filter(isExtrude)
+        .filter(usesSketch)
         .some((f) => f.sketch === r.sketchId && (f.profiles === "all" || f.profiles.some((s) => regionContains(r.region, toLocal(s)))));
     const fresh = all.filter((r) => !consumed(r));
     this.candidates = fresh.length > 0 ? fresh : all;
