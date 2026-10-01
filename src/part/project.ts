@@ -21,7 +21,7 @@ import { Arc } from "../entities/arc";
 import { Circle } from "../entities/circle";
 import { Ellipse } from "../entities/ellipse";
 import { Polyline } from "../entities/polyline";
-import type { Body, Edge } from "./kernel/types";
+import type { Body, Edge, Face } from "./kernel/types";
 import type { Frame } from "./plane";
 import { fromLocal } from "./plane";
 import type { Vec3 } from "./vec3";
@@ -106,9 +106,18 @@ function projectEdge(frame: Frame, edge: Edge): Entity | null {
   return pts.length < 2 ? null : new Polyline(pts.map((point) => ({ point, bulge: 0 })), false);
 }
 
+/** A projected entity and what of the solid it came from: an edge, or (a
+ *  round face's outline seen from the side) that face. */
+export interface Projected {
+  entity: Entity;
+  body: Body;
+  edge: Edge | null;
+  face: Face | null;
+}
+
 /** Outline lines of cylindrical faces seen from the side. */
-function silhouettes(frame: Frame, body: Body): Entity[] {
-  const out: Entity[] = [];
+function silhouettes(frame: Frame, body: Body): Projected[] {
+  const out: Projected[] = [];
   const { positions, indices, faceIds } = body.mesh;
   for (const face of body.faces) {
     if (face.geom.kind !== "cylinder") continue;
@@ -139,7 +148,7 @@ function silhouettes(frame: Frame, body: Body): Entity[] {
       if (!radials.some((r) => dot(r, dir) > Math.cos(Math.PI / 30))) continue;
       const base = add(face.geom.axisOrigin, scale(dir, face.geom.radius));
       const l = line(toSketch(frame, add(base, scale(a, tMin))), toSketch(frame, add(base, scale(a, tMax))));
-      if (l !== null) out.push(l);
+      if (l !== null) out.push({ entity: l, body, edge: null, face });
     }
   }
   return out;
@@ -156,18 +165,28 @@ function lineKey(l: Line): string {
  *  exact-duplicate lines removed (e.g. a prism's top and bottom edges seen
  *  from the side land on the same line). */
 export function projectBodies(bodies: readonly Body[], frame: Frame): Entity[] {
-  const out: Entity[] = [];
+  return projectBodiesWithSources(bodies, frame).map((p) => p.entity);
+}
+
+/** projectBodies(), each entity with the edge / face it came from. */
+export function projectBodiesWithSources(bodies: readonly Body[], frame: Frame): Projected[] {
+  const out: Projected[] = [];
   const seen = new Set<string>();
   for (const body of bodies) {
-    const projected = [...body.edges.map((e) => projectEdge(frame, e)), ...silhouettes(frame, body)];
-    for (const e of projected) {
-      if (e === null) continue;
-      if (e instanceof Line) {
-        const key = lineKey(e);
+    const projected: Projected[] = [
+      ...body.edges.flatMap((edge) => {
+        const entity = projectEdge(frame, edge);
+        return entity === null ? [] : [{ entity, body, edge, face: null }];
+      }),
+      ...silhouettes(frame, body),
+    ];
+    for (const p of projected) {
+      if (p.entity instanceof Line) {
+        const key = lineKey(p.entity);
         if (seen.has(key)) continue;
         seen.add(key);
       }
-      out.push(e);
+      out.push(p);
     }
   }
   return out;

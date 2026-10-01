@@ -3,8 +3,8 @@
  * core/sizeLabels.ts
  *
  * An entity's OWN sizes, shown on it as soon as it is drawn and editable in
- * place: a Line's length, a Circle's diameter, a rectangle's width and
- * height. (Where the entity sits relative to others is a separate matter --
+ * place: a Line's length, a Circle's diameter, an Arc's radius, a
+ * rectangle's width and height. (Where the entity sits relative to others is a separate matter --
  * distance constraints, core/constraints.ts -- placed by hand.)
  *
  * Pure geometry here; ui/canvasView.ts draws the labels and routes a
@@ -15,9 +15,10 @@ import type { Point } from "./types";
 import type { Entity } from "../entities/entity";
 import { Line } from "../entities/line";
 import { Circle } from "../entities/circle";
+import { Arc } from "../entities/arc";
 import { Polyline } from "../entities/polyline";
 
-export type SizeKey = "length" | "diameter" | "width" | "height";
+export type SizeKey = "length" | "diameter" | "radius" | "width" | "height";
 
 export interface SizeLabel {
   key: SizeKey;
@@ -75,6 +76,14 @@ export function sizeLabelsOf(entity: Entity): SizeLabel[] {
     const anchor = { x: entity.center.x + away.x * entity.radius, y: entity.center.y + away.y * entity.radius };
     return [{ key: "diameter", value: entity.radius * 2, prefix: "Ø", name: "diameter", anchor, away }];
   }
+  if (entity instanceof Arc) {
+    // At the middle of the arc, outside it. (Angles run clockwise on screen in the Y-down world.)
+    const sweep = (((entity.endAngle - entity.startAngle) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI;
+    const a = entity.startAngle + sweep / 2;
+    const away = { x: Math.cos(a), y: Math.sin(a) };
+    const anchor = { x: entity.center.x + away.x * entity.radius, y: entity.center.y + away.y * entity.radius };
+    return [{ key: "radius", value: entity.radius, prefix: "R", name: "radius", anchor, away }];
+  }
   if (entity instanceof Polyline) {
     const c = rectangleCorners(entity);
     if (c === null) return [];
@@ -110,6 +119,10 @@ export function applySize(entity: Entity, key: SizeKey, value: number): boolean 
   }
   if (entity instanceof Circle && key === "diameter") {
     entity.radius = value / 2;
+    return true;
+  }
+  if (entity instanceof Arc && key === "radius") {
+    entity.radius = value;
     return true;
   }
   if (entity instanceof Polyline && (key === "width" || key === "height")) {

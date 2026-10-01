@@ -73,6 +73,13 @@ export class ConstrainDistanceCommand extends BaseCommand {
     return null;
   }
 
+  /** `ref_model` for reference geometry that is an edge of the solid, so the
+   *  constraint follows the solid. */
+  private modelRef(entity: Drivable): { ref_model?: unknown } {
+    const ref = this.engine.modelRefOf?.(entity);
+    return ref === undefined ? {} : { ref_model: ref };
+  }
+
   /** A reference may also be the reference geometry behind a part sketch. */
   private pickReference(worldPos: Point): { entity: Drivable; underlay: boolean } | null {
     const own = this.pickEntity(worldPos);
@@ -177,7 +184,7 @@ export class ConstrainDistanceCommand extends BaseCommand {
       ref_entity_id: this.refIsUnderlay ? "" : refEntity.id,
       ref_feature: refFeature,
       target,
-      ...(this.refIsUnderlay ? { ref_geom: referenceGeometry(refEntity) } : {}),
+      ...(this.refIsUnderlay ? { ref_geom: referenceGeometry(refEntity), ...this.modelRef(refEntity) } : {}),
     });
 
     this.refEntity = null;

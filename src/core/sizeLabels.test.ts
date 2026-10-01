@@ -43,7 +43,13 @@ describe("an entity's own sizes", () => {
     const open = rect(0, 0, 10, 5);
     open.closed = false;
     expect(sizeLabelsOf(open)).toEqual([]);
-    expect(sizeLabelsOf(new Arc({ x: 0, y: 0 }, 5, 0, 1))).toEqual([]);
+    // An arc shows (and takes) its radius.
+    const arc = new Arc({ x: 0, y: 0 }, 5, 0, Math.PI / 2);
+    const r = sizeLabelsOf(arc)[0]!;
+    expect([r.key, r.value, r.prefix]).toEqual(["radius", 5, "R"]);
+    expect(r.anchor.x).toBeCloseTo(5 * Math.SQRT1_2); // at the middle of the arc
+    expect(applySize(arc, "radius", 8)).toBe(true);
+    expect(arc.radius).toBe(8);
     expect(sizeLabelsOf(new Line({ x: 1, y: 1 }, { x: 1, y: 1 }))).toEqual([]);
   });
 

@@ -34,6 +34,9 @@ export interface ModelCommand {
   onPick?(hit: Hit): void;
   onFacePointHover?(hit: { point: Point; snap: string | null } | null): void;
   onSurfaceHover?(hit: Extract<Hit, { kind: "surfacePoint" }> | null): void;
+  /** A row of the Model tree was clicked while this command runs; return
+   *  true if the command took it (e.g. Pattern: that feature to repeat). */
+  onTreePick?(id: string): boolean;
   /** A key in the 3D view; return true if handled (e.g. Delete a selected dimension). */
   onKey?(e: KeyboardEvent): boolean;
   /** Enter in the 3D view. */

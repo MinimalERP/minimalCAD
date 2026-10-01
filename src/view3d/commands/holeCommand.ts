@@ -24,9 +24,10 @@
  */
 
 import type { HoleCenter, HoleDim, HoleFeature, HoleRef, HoleStyle } from "../../part/types";
-import { nextId } from "../../part/types";
-import type { TopoRef } from "../../part/kernel/types";
-import { faceHasRef } from "../../part/kernel/types";
+import { isBasePlane, nextId } from "../../part/types";
+import { planeFrame } from "../../part/plane";
+import type { Body, TopoRef } from "../../part/kernel/types";
+import { faceHasRef, isPlaneRef } from "../../part/kernel/types";
 import { faceSurfaceOf, rebuild, surfaceThroughLength } from "../../part/rebuild";
 import { dependsOn, holeTools, refLine, resolveCenters, signedDistance } from "../../part/hole";
 import { edgesOnFace, refsOnRoundFace } from "../../part/faceTopology";
@@ -180,7 +181,7 @@ export class HoleCommand implements ModelCommand {
       const part = ctx.part();
       const upTo = { ...part, features: part.features.slice(0, part.features.findIndex((x) => x.id === editing.id)) };
       const before = rebuild(upTo, ctx.drawingEntities()).bodies;
-      this.useFace(editing.face, faceSurfaceOf(before, editing.face), before);
+      this.useFace(editing.face, this.surfaceFor(editing.face, before), before);
     }
     ctx.view.onDimClick = (id) => this.onDimClick(id);
     ctx.view.setSurfacePointMode();
@@ -203,7 +204,7 @@ export class HoleCommand implements ModelCommand {
   }
 
   private hint(): string {
-    if (this.face === null) return "Click on a flat face where the hole goes - or on the outside of a round face for a radial hole";
+    if (this.face === null) return "Click on a flat face where the hole goes - on the outside of a round face for a radial hole - or on a work plane";
     const round = this.cyl() !== null;
     if (!this.constrain) {
       return round
@@ -251,6 +252,13 @@ export class HoleCommand implements ModelCommand {
     const topo = body === undefined ? null : edgesOnFace(body, frame);
     this.faceLines = (topo?.lines ?? []).map((seg) => ({ seg, label: "edge" }));
     this.faceCircles = topo?.circles.map((c) => c.center) ?? [];
+  }
+
+  /** The surface a hole's "face" is: a face of the solid, or a work plane. */
+  private surfaceFor(ref: TopoRef, bodies: readonly Body[]): Surface | null {
+    if (!isPlaneRef(ref)) return faceSurfaceOf(bodies, ref);
+    const key = ref.feature;
+    return isBasePlane(key) ? planeFrame({ base: key, offset: 0 }) : (this.ctx.result()?.planes.get(key)?.frame ?? null);
   }
 
   private cyl(): CylFrame | null {
@@ -438,7 +446,7 @@ export class HoleCommand implements ModelCommand {
   onPick(hit: Hit): void {
     if (hit.kind !== "surfacePoint") return;
     if (this.face === null) {
-      this.useFace(hit.ref, faceSurfaceOf(this.ctx.result()?.bodies ?? [], hit.ref));
+      this.useFace(hit.ref, isPlaneRef(hit.ref) ? hit.frame : faceSurfaceOf(this.ctx.result()?.bodies ?? [], hit.ref));
       if (this.face === null) return;
       this.addCenter(hit.point);
       return;
@@ -725,7 +733,7 @@ export class HoleCommand implements ModelCommand {
     this.leanRows.setVisible(this.leaning());
     this.locateChoice.setVisible(this.canLocateAxis());
     this.faceSel.set(
-      this.face === null ? "Click on a face" : cyl !== null ? `Round face Ø${+(2 * cyl.radius).toFixed(3)}` : "Flat face",
+      this.face === null ? "Click on a face" : cyl !== null ? `Round face Ø${+(2 * cyl.radius).toFixed(3)}` : isPlaneRef(this.face) ? `Work plane ${this.face.feature}` : "Flat face",
       this.face !== null,
     );
     const n = this.centers.length;

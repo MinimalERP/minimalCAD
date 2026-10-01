@@ -174,6 +174,9 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
     if (reference !== undefined) {
       engine.underlay = reference.underlay;
       engine.ucsLabels = reference.labels;
+      // Constraints against the solid's edges follow the solid.
+      engine.document.modelRef = reference.modelRef;
+      engine.modelRefOf = reference.modelRefOf;
     }
     engine.sizeLabelMode = "all";
     session.sketch = { sketchId, engine, viewport, plane: sketchPlane };

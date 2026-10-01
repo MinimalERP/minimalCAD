@@ -403,6 +403,72 @@ function drawConstrain(ctx: CanvasRenderingContext2D): void {
   arrowhead(ctx, 11, 10, 0);
 }
 
+// --- Geometric constraints: the line(s) involved, with a small amber tie mark ---
+
+const CONSTRAINT_MARK = "#f5b942";
+
+function tieMark(ctx: CanvasRenderingContext2D, draw: () => void): void {
+  ctx.save();
+  ctx.strokeStyle = CONSTRAINT_MARK;
+  ctx.fillStyle = CONSTRAINT_MARK;
+  ctx.lineWidth = 1.6;
+  draw();
+  ctx.restore();
+}
+
+function drawHorizontal(ctx: CanvasRenderingContext2D): void {
+  line(ctx, 2, 12, 18, 12);
+  tieMark(ctx, () => {
+    line(ctx, 7, 6, 13, 6);
+  });
+  dashed(ctx, () => line(ctx, 2, 17, 18, 17));
+}
+
+function drawVertical(ctx: CanvasRenderingContext2D): void {
+  line(ctx, 8, 2, 8, 18);
+  tieMark(ctx, () => {
+    line(ctx, 14, 7, 14, 13);
+  });
+  dashed(ctx, () => line(ctx, 3, 2, 3, 18));
+}
+
+function drawParallel(ctx: CanvasRenderingContext2D): void {
+  line(ctx, 2, 15, 12, 3);
+  line(ctx, 8, 17, 18, 5);
+  tieMark(ctx, () => {
+    line(ctx, 3, 5, 6, 8);
+    line(ctx, 14, 12, 17, 15);
+  });
+}
+
+function drawPerpendicular(ctx: CanvasRenderingContext2D): void {
+  line(ctx, 2, 17, 18, 17);
+  line(ctx, 10, 17, 10, 3);
+  tieMark(ctx, () => {
+    line(ctx, 10, 13, 14, 13);
+    line(ctx, 14, 13, 14, 17);
+  });
+}
+
+function drawEqual(ctx: CanvasRenderingContext2D): void {
+  line(ctx, 2, 4, 18, 4);
+  line(ctx, 2, 16, 18, 16);
+  tieMark(ctx, () => {
+    line(ctx, 7, 8.5, 13, 8.5);
+    line(ctx, 7, 11.5, 13, 11.5);
+  });
+}
+
+function drawCoincident(ctx: CanvasRenderingContext2D): void {
+  line(ctx, 2, 17, 10, 10);
+  line(ctx, 10, 10, 18, 4);
+  tieMark(ctx, () => {
+    ctx.beginPath();
+    ctx.arc(10, 10, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
 function drawCloud(ctx: CanvasRenderingContext2D): void {
   ctx.beginPath();
   ctx.arc(7, 12, 4, Math.PI * 0.5, Math.PI * 1.6);
@@ -597,6 +663,47 @@ function edgeBlock(ctx: CanvasRenderingContext2D, round: boolean): void {
 const drawFillet3d: Drawer = (ctx) => edgeBlock(ctx, true);
 const drawChamfer3d: Drawer = (ctx) => edgeBlock(ctx, false);
 
+function drawPattern3d(ctx: CanvasRenderingContext2D): void {
+  // the same small block repeated in a grid; the original in amber
+  const cell = (x: number, y: number, top: string): void => block(ctx, x, y, 4.5, 4, 2, top);
+  cell(11, 5, SOLID_TOP);
+  cell(2, 5, SOLID_TOP);
+  cell(11, 14, SOLID_TOP);
+  cell(2, 14, ACCENT);
+}
+
+function drawCircPattern(ctx: CanvasRenderingContext2D): void {
+  // holes spaced round a disc
+  ctx.beginPath();
+  ctx.arc(10, 10, 8.5, 0, Math.PI * 2);
+  ctx.fillStyle = SOLID_FRONT;
+  ctx.fill();
+  ctx.save();
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  ctx.restore();
+  for (let i = 0; i < 6; i++) {
+    const a = (i * Math.PI) / 3 - Math.PI / 2;
+    ctx.beginPath();
+    ctx.arc(10 + 5.4 * Math.cos(a), 10 + 5.4 * Math.sin(a), 1.7, 0, Math.PI * 2);
+    ctx.fillStyle = i === 0 ? ACCENT : HOLE_DARK;
+    ctx.fill();
+  }
+}
+
+function drawMirror3d(ctx: CanvasRenderingContext2D): void {
+  // a shape and its reflection either side of a dashed plane
+  facet(ctx, [[2, 16], [2, 8], [7, 4], [7, 16]], ACCENT);
+  facet(ctx, [[18, 16], [18, 8], [13, 4], [13, 16]], SOLID_FRONT);
+  ctx.save();
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1.1;
+  ctx.setLineDash([2.5, 1.5]);
+  line(ctx, 10, 1, 10, 19);
+  ctx.restore();
+}
+
 function drawWorkPlane(ctx: CanvasRenderingContext2D): void {
   // an amber plane tilted up off a (dashed) base plane
   dashed(ctx, () => planeOutline(ctx));
@@ -652,6 +759,26 @@ function drawProjectedView(ctx: CanvasRenderingContext2D): void {
   line(ctx, 5, 9, 5, 11);
 }
 
+function drawSectionView(ctx: CanvasRenderingContext2D): void {
+  // a view with its cutting line and arrows, and the hatched section beside it
+  ctx.strokeRect(1.5, 5, 7, 10);
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 1, 1, 1]);
+  line(ctx, 5, 2, 5, 18);
+  ctx.restore();
+  arrowhead(ctx, 8, 2.5, 0, 2.5);
+  arrowhead(ctx, 8, 17.5, 0, 2.5);
+  ctx.strokeRect(12, 5, 6.5, 10);
+  ctx.save();
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.rect(12, 5, 6.5, 10);
+  ctx.clip();
+  for (let k = -10; k < 10; k += 2.5) line(ctx, 12 + k, 15, 12 + k + 10, 5);
+  ctx.restore();
+}
+
 function drawMoveView(ctx: CanvasRenderingContext2D): void {
   ctx.strokeRect(5, 6, 10, 8);
   line(ctx, 10, 1, 10, 19);
@@ -678,6 +805,7 @@ const DRAWERS: Record<string, Drawer> = {
   sheet: drawSheet,
   baseview: drawBaseView,
   projview: drawProjectedView,
+  sectionview: drawSectionView,
   moveview: drawMoveView,
   editview: drawEditView,
   deleteview: drawDeleteView,
@@ -687,6 +815,9 @@ const DRAWERS: Record<string, Drawer> = {
   revolve: drawRevolve,
   workplane: drawWorkPlane,
   hole: drawHole,
+  pattern: drawPattern3d,
+  circpattern: drawCircPattern,
+  mirror3d: drawMirror3d,
   fillet3d: drawFillet3d,
   chamfer3d: drawChamfer3d,
   viewfront: viewCube("front"),
@@ -728,6 +859,12 @@ const DRAWERS: Record<string, Drawer> = {
   insertlib: drawInsertLib,
   savelib: drawSaveLib,
   constrain: drawConstrain,
+  horizontal: drawHorizontal,
+  vertical: drawVertical,
+  parallel: drawParallel,
+  perpendicular: drawPerpendicular,
+  equal: drawEqual,
+  coincident: drawCoincident,
   pdfexport: drawExportPdf,
   cloud: drawCloud,
 };

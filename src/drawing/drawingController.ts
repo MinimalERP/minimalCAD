@@ -20,6 +20,8 @@ import type { Engine } from "../engine/engine";
 import type { Viewport } from "../engine/viewport";
 import type { Command } from "../commands/types";
 import { Dimension } from "../entities/dimension";
+import { Circle } from "../entities/circle";
+import { Arc } from "../entities/arc";
 import type { Body } from "../part/kernel/types";
 import { rebuild } from "../part/rebuild";
 import { parsePart } from "../part/types";
@@ -27,6 +29,7 @@ import { FeatureDialog } from "../view3d/featureDialog";
 import { exportSheetPdf } from "../io/pdf";
 import { downloadPdfBytes, promptFilename } from "../io/saveLoad";
 import { showToast } from "../ui/toast";
+import { carryAnnotations, nextSectionName } from "./section";
 import type { Orient } from "./orientCube";
 import { isIso, orientationCube } from "./orientCube";
 import type { PaintStyle, Paper, Projection, SheetData, SheetGraphics, SheetView, Side, ViewStyle } from "./sheet";
@@ -48,9 +51,11 @@ import {
   sheetGraphics,
   suggestScale,
   viewAt,
+  axesOf,
+  placeView,
 } from "./sheet";
 
-export type DrawingAction = "sheet" | "baseview" | "projview" | "moveview" | "editview" | "deleteview" | "print";
+export type DrawingAction = "sheet" | "baseview" | "projview" | "sectionview" | "moveview" | "editview" | "deleteview" | "print";
 
 export interface DrawingHost {
   /** The linked model tab's part + 2D drawing, or null if it's gone. */
@@ -172,6 +177,7 @@ export class DrawingController {
     if (a === "sheet") this.sheetDialog();
     else if (a === "baseview") cm.startCustom("BASE VIEW", new BaseViewCommand(this));
     else if (a === "projview") cm.startCustom("PROJECTED VIEW", new ProjectedViewCommand(this));
+    else if (a === "sectionview") cm.startCustom("SECTION VIEW", new SectionViewCommand(this));
     else if (a === "moveview") cm.startCustom("MOVE VIEW", new PickViewCommand(this, "move"));
     else if (a === "editview") cm.startCustom("EDIT VIEW", new PickViewCommand(this, "edit"));
     else if (a === "deleteview") cm.startCustom("DELETE VIEW", new PickViewCommand(this, "delete"));
@@ -281,8 +287,30 @@ export class DrawingController {
     this.setSheet({ ...s, views: [...s.views, v] });
   }
 
+  /** Replaces the views; the annotations on a view that moved, was
+   *  rescaled or was deleted go with it (drawing/section.ts). */
   replaceViews(views: SheetView[]): void {
-    this.setSheet({ ...this.sheet(), views });
+    const before = this.sheet();
+    const boxes = this.refresh().views;
+    const doc = this.engine.document;
+    this.engine.undo.push(doc.toDict());
+    const kept = carryAnnotations(doc.entities, boxes, before.views, views);
+    for (const e of doc.entities.slice()) if (!kept.includes(e)) doc.removeEntity(e);
+    doc.sheets = [{ ...before, views, entities: [], constraints: [] }];
+    this.refresh();
+  }
+
+  /** The model point under a world point on view `id`: on the plane
+   *  through the model's origin facing that view (depth 0). */
+  modelPointOn(view: SheetView, world: Point): { right: number; up: number } | null {
+    const box = this.boxOf(view.id);
+    if (box === null) return null;
+    const res = this.cache.get(this.bodies, axesOf(view));
+    const at = placeView(res, view);
+    if (at === null) return null;
+    // toWorld is p -> centre + (p - c) * scale: invert it from two samples.
+    const o = at.toWorld({ x: 0, y: 0 });
+    return { right: (world.x - o.x) / view.scale, up: -(world.y - o.y) / view.scale };
   }
 
   /** Paper point (Y up) of a world point. */
@@ -549,6 +577,112 @@ class ProjectedViewCommand extends DrawingCommand {
     const v = this.candidate();
     if (v !== null) this.c.addView(v);
     this.c.redraw();
+  }
+
+  draw(ctx: CanvasRenderingContext2D): void {
+    const v = this.parent === null ? null : this.candidate();
+    if (v !== null) this.c.drawPreview(ctx, [v]);
+  }
+}
+
+/**
+ * Section View: click a view where the cut goes, then click beside it to
+ * place the section. Right / left of the parent gives an upright cutting
+ * line (the section looks sideways); above / below gives a level one.
+ * The click on the parent snaps to its geometry (a hole's centre, an edge).
+ */
+class SectionViewCommand extends DrawingCommand {
+  private parent: SheetView | null = null;
+  /** Where the cut goes, in the parent's own 2D (model units). */
+  private through: { right: number; up: number } | null = null;
+  private at: Point | null = null;
+
+  start(): void {
+    if (this.c.sheet().views.length === 0) {
+      showToast("Place a base view first.");
+      this.c.done();
+      return;
+    }
+    this.c.status("Click on a view where the cut should go (it snaps to centres and edges)", "SECTION VIEW");
+  }
+
+  private candidate(): SheetView | null {
+    const p = this.parent;
+    const box = p === null ? null : this.c.boxOf(p.id);
+    if (p === null || box === null || this.at === null || this.through === null) return null;
+    const side = sideOf(box, this.at);
+    if (typeof side === "object") return null; // off a corner: no section there
+    const sheet = this.c.sheet();
+    const axes = projectedAxes(p, side, sheet.projection);
+    const a = axesOf(p);
+    // A point on the cutting plane: the clicked spot, at depth 0 of the parent.
+    const point = {
+      x: a.right.x * this.through.right + a.up.x * this.through.up,
+      y: a.right.y * this.through.right + a.up.y * this.through.up,
+      z: a.right.z * this.through.right + a.up.z * this.through.up,
+    };
+    const pos = this.c.paperOf(this.at);
+    const horizontal = side === "left" || side === "right";
+    const name = nextSectionName(sheet.views.flatMap((v) => (v.section === undefined ? [] : [v.section.name])));
+    return {
+      id: this.c.nextViewId(),
+      dir: axes.dir,
+      up: axes.up,
+      scale: p.scale,
+      x: horizontal ? pos.x : p.x,
+      y: horizontal ? p.y : pos.y,
+      parent: p.id,
+      hiddenLines: false,
+      style: "lines",
+      label: `SECTION ${name}-${name}`,
+      section: { at: point, name },
+    };
+  }
+
+  /** Where a click on the parent puts the cut: through the centre of a
+   *  hole / circle clicked on or inside (what a section is nearly always
+   *  wanted through), else whatever the click snaps to. */
+  private cutPoint(pt: Point): Point {
+    let best: Point | null = null;
+    let bestR = Infinity;
+    for (const e of this.c.engine.underlay) {
+      if (!(e instanceof Circle || e instanceof Arc)) continue;
+      const d = Math.hypot(pt.x - e.center.x, pt.y - e.center.y);
+      if (d <= Math.max(e.radius, this.c.engine.pickTolerance(10)) && e.radius < bestR) {
+        best = { ...e.center };
+        bestR = e.radius;
+      }
+    }
+    return best ?? this.c.engine.snap(pt).point;
+  }
+
+  mouseMove(pt: Point): void {
+    this.at = pt;
+    this.c.redraw();
+  }
+
+  leftClick(pt: Point): void {
+    this.at = pt;
+    if (this.parent === null) {
+      const snapped = this.cutPoint(pt);
+      const id = viewAt(this.c.graphicsNow(), snapped);
+      const view = this.c.sheet().views.find((v) => v.id === id) ?? null;
+      if (view === null) return;
+      if (view.free === true) {
+        this.c.status("Pick a straight-on view (not an iso) to cut", "SECTION VIEW");
+        return;
+      }
+      this.parent = view;
+      this.through = this.c.modelPointOn(view, snapped);
+      this.c.status("Move right / left (upright cut) or up / down (level cut) of the view and click to place the section", "SECTION VIEW");
+      return;
+    }
+    const box = this.c.boxOf(this.parent.id);
+    if (box !== null && pt.x >= box[0] && pt.x <= box[2] && pt.y >= box[1] && pt.y <= box[3]) return;
+    const v = this.candidate();
+    if (v === null) return;
+    this.c.addView(v);
+    this.c.done();
   }
 
   draw(ctx: CanvasRenderingContext2D): void {

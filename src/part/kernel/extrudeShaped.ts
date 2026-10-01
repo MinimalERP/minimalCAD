@@ -22,7 +22,7 @@ import type { Frame } from "../plane";
 import { localTo3d } from "../plane";
 import type { Loop, Region, Segment } from "../profile";
 import type { Vec3 } from "../vec3";
-import { add, cross, normalize, scale, sub } from "../vec3";
+import { add, cross, dot, normalize, scale, sub } from "../vec3";
 import { isTangent, tangentIn, tangentOut } from "./extrude";
 import type { Body, Edge, Face, TopoRef } from "./types";
 
@@ -38,6 +38,10 @@ export interface ExtrudeShape {
    *  own direction (a drawn circle gives a truly round boss); the footprint
    *  is that shape stretched along the lean, about each region's centre. */
   square: boolean;
+  /** Stop at this plane instead of at h1: the body runs from the sketch
+   *  plane to it (whichever side it is on), its end lying in the plane even
+   *  when that is sloped. Straight sides only (no taper / lean). */
+  upTo?: { origin: Vec3; normal: Vec3 };
 }
 
 const TOO_STEEP = "The taper is too steep for this shape - its sides meet before the end";
@@ -226,6 +230,41 @@ export function extrudeShaped(featureId: string, regions: readonly Region[], fra
   const negN = scale(frame.n, -1);
   const top = levels.length - 1;
 
+  // Up to a plane: one end of the body is the sketch plane, the other lies
+  // in that plane -- a different height under every point if it slopes.
+  let heightAt = (L: number, _p: Point): number => levels[L]!;
+  let capNormals: [Vec3, Vec3] = [negN, frame.n];
+  let slopedLevel = -1;
+  if (shape.upTo !== undefined) {
+    const upTo = shape.upTo;
+    const nP = normalize(upTo.normal);
+    const den = dot(frame.n, nP);
+    if (Math.abs(den) < 1e-6) return "That face is square to the sketch - the extrusion would never reach it";
+    const planeHeight = (p: Point): number => dot(sub(upTo.origin, localTo3d(frame, p, 0)), nP) / den;
+    let lo = Infinity;
+    let hi = -Infinity;
+    let size = 1;
+    for (const region of regions) {
+      for (const loop of [region.outer, ...region.holes]) {
+        for (const p of loop.polygon) {
+          const h = planeHeight(p);
+          lo = Math.min(lo, h);
+          hi = Math.max(hi, h);
+          size = Math.max(size, Math.abs(p.x), Math.abs(p.y));
+        }
+      }
+    }
+    const tol = size * 1e-9;
+    if (hi <= tol && lo >= -tol) return "The shape already lies on that face - there is nothing between them";
+    if (lo < tol && hi > -tol) return "That face cuts across the sketch plane under the shape - pick a face wholly on one side";
+    const up = lo > 0;
+    const planeLevel = up ? 1 : 0;
+    heightAt = (L, p) => (L === planeLevel ? planeHeight(p) : 0);
+    const away = scale(nP, Math.sign(den) * (up ? 1 : -1)); // out of the body, on the plane
+    capNormals = up ? [negN, away] : [away, frame.n];
+    if (Math.abs(Math.abs(den) - 1) > 1e-9) slopedLevel = planeLevel;
+  }
+
   for (const [ri, region] of regions.entries()) {
     const loops: Loop[] = [region.outer, ...region.holes];
     const about = centroid(region.outer.polygon);
@@ -236,12 +275,12 @@ export function extrudeShaped(featureId: string, regions: readonly Region[], fra
     };
     // pts[level][loop][vertex]
     const pts: Vec3[][][] = [];
-    for (const h of levels) {
+    for (const [L, h] of levels.entries()) {
       const perLoop: Vec3[][] = [];
       for (const loop of loops) {
         const moved = offsetLoop(loop, offsetAt(h));
         if (moved === null) return TOO_STEEP;
-        perLoop.push(moved.map((p) => place(p, h)));
+        perLoop.push(moved.map((p) => place(p, heightAt(L, p))));
       }
       pts.push(perLoop);
     }
@@ -258,10 +297,10 @@ export function extrudeShaped(featureId: string, regions: readonly Region[], fra
       }
     }
     const tris = triangulate(flat, holeIdx);
-    const startFace = addFace(ref("start", `${ri}`), { kind: "plane", origin: pts[0]![0]![0]!, normal: negN });
-    const endFace = addFace(ref("end", `${ri}`), { kind: "plane", origin: pts[top]![0]![0]!, normal: frame.n });
-    const bottom = loops.flatMap((_, li) => pts[0]![li]!.map((p) => vertex(p, negN)));
-    const upper = loops.flatMap((_, li) => pts[top]![li]!.map((p) => vertex(p, frame.n)));
+    const startFace = addFace(ref("start", `${ri}`), { kind: "plane", origin: pts[0]![0]![0]!, normal: capNormals[0] });
+    const endFace = addFace(ref("end", `${ri}`), { kind: "plane", origin: pts[top]![0]![0]!, normal: capNormals[1] });
+    const bottom = loops.flatMap((_, li) => pts[0]![li]!.map((p) => vertex(p, capNormals[0])));
+    const upper = loops.flatMap((_, li) => pts[top]![li]!.map((p) => vertex(p, capNormals[1])));
     for (let i = 0; i < tris.length; i += 3) {
       let a = tris[i]!;
       let b = tris[i + 1]!;
@@ -299,8 +338,8 @@ export function extrudeShaped(featureId: string, regions: readonly Region[], fra
           const at = pts[L]![li]!;
           let geom: Edge["geom"];
           if (seg.kind === "line") geom = { kind: "line", a: at[js[0]!]!, b: at[js[js.length - 1]!]! };
-          else if (seg.kind === "arc" && !square) {
-            geom = { kind: "arc", center: place(seg.c, h), normal: frame.n, radius: seg.r + Math.sign(seg.sweep) * offsetAt(h), start: at[js[0]!]!, sweep: seg.sweep };
+          else if (seg.kind === "arc" && !square && L !== slopedLevel) {
+            geom = { kind: "arc", center: place(seg.c, heightAt(L, seg.c)), normal: frame.n, radius: seg.r + Math.sign(seg.sweep) * offsetAt(h), start: at[js[0]!]!, sweep: seg.sweep };
           } else geom = { kind: "polyline", pts: js.map((j) => at[j]!) };
           edges.push({ ref: ref(role, role === "side" ? `${idx}.m` : idx), geom });
         });

@@ -295,6 +295,7 @@ export const ICONS = {
   dirSym: svg('<line x1="3" y1="10" x2="17" y2="10"/><line x1="10" y1="2" x2="10" y2="18"/><path d="M7 5 L10 2 L13 5 M7 15 L10 18 L13 15"/>'),
   distance: svg('<line x1="3" y1="17" x2="17" y2="17"/><line x1="3" y1="7" x2="17" y2="7" stroke-dasharray="2 1.5"/><path d="M10 16 L10 8 M8 10 L10 8 L12 10"/>'),
   through: svg('<rect x="5" y="6" width="10" height="8"/><line x1="10" y1="1" x2="10" y2="19"/><path d="M8 17 L10 19 L12 17"/>'),
+  toFace: svg('<path d="M3 17 H11 V9 H3 Z"/><path d="M14 2 L18 6 V18 L14 14 Z" fill="currentColor" fill-opacity="0.35"/><path d="M11 13 H14 M12.5 11.5 L14 13 L12.5 14.5"/>'),
   toAxis: svg('<circle cx="10" cy="11" r="7"/><line x1="2" y1="11" x2="18" y2="11" stroke-dasharray="1.5 1.5"/><path d="M8.5 1 V11 M11.5 1 V11"/>'),
   chamferEqual: svg('<path d="M3 17 V9 L9 3 H17"/><path d="M3 9 H1 M9 3 V1" stroke-dasharray="1.5 1.5"/>'),
   chamferTwo: svg('<path d="M3 17 V11 L7 3 H17"/><path d="M3 11 H1 M7 3 V1" stroke-dasharray="1.5 1.5"/>'),

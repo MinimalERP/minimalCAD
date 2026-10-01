@@ -551,6 +551,11 @@ body {
   padding: 0 4px;
 }
 
+#command-bar .overlay-label.enabled {
+  color: #c586c0;
+  font-weight: normal;
+}
+
 #command-bar .ortho-label.enabled {
   color: #00ff88;
   font-weight: bold;

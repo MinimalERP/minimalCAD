@@ -16,6 +16,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { triangulate } from "../part/kernel/triangulate";
 import { ViewCube } from "./viewCube";
 import type { Body, Edge, TopoRef } from "../part/kernel/types";
+import { planeRef } from "../part/kernel/types";
 import type { Frame } from "../part/plane";
 import { faceFrame, localTo3d, planeFrame } from "../part/plane";
 import { edgesOnFace } from "../part/faceTopology";
@@ -90,6 +91,15 @@ export interface SnapCandidate {
 }
 
 const SNAP_PX = 12;
+
+/** Stand-in for "no solid": a click that landed on a work plane. */
+const NO_BODY: Body = {
+  id: "",
+  feature: "",
+  mesh: { positions: new Float64Array(0), normals: new Float64Array(0), indices: new Uint32Array(0), faceIds: new Uint32Array(0) },
+  faces: [],
+  edges: [],
+};
 
 function v3(p: { x: number; y: number; z: number }): THREE.Vector3 {
   return new THREE.Vector3(p.x, p.y, p.z);
@@ -885,7 +895,16 @@ export class ModelView {
       return face === undefined ? null : { kind: "face", ref: face.ref, body: body!, faceId: face.id };
     }
     if (this.pickMode === "surfacePoint") {
-      const h = this.raycaster.intersectObjects(this.bodyMeshes, false)[0];
+      // A work plane in front of the solid there can be clicked too (a hole on a plane).
+      const planes = [...this.planeMeshes].filter(([k, m]) => k.startsWith("wp:") && m.visible).map(([, m]) => m);
+      const h = this.raycaster.intersectObjects([...planes, ...this.bodyMeshes], false)[0];
+      const planeKey = h !== undefined && h.object.userData.body === undefined ? (h.object.userData.key as string | undefined) : undefined;
+      const onPlane = planeKey === undefined ? undefined : this.workPlanes.find((p) => p.key === planeKey);
+      if (h !== undefined && onPlane !== undefined) {
+        const d = sub({ x: h.point.x, y: h.point.y, z: h.point.z }, onPlane.frame.origin);
+        const raw = { x: dot(d, onPlane.frame.u), y: dot(d, onPlane.frame.v) };
+        return { kind: "surfacePoint", ref: planeRef(onPlane.key), body: NO_BODY, faceId: -1, frame: onPlane.frame, point: raw, raw, snap: null };
+      }
       const body = h?.object.userData.body as Body | undefined;
       const faceId = h?.faceIndex == null || body === undefined ? undefined : body.mesh.faceIds[h.faceIndex];
       const face = faceId === undefined ? undefined : body!.faces[faceId];

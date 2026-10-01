@@ -35,6 +35,11 @@ export interface ParseResult {
 export class Document {
   entities: Entity[] = [];
   constraints: unknown[] = [];
+
+  /** Set while this document is a part sketch: finds the reference geometry
+   *  (a projected edge of the solid, as it is NOW) a constraint measures
+   *  from -- see core/constraints.ts's referenceEntity(). Never saved. */
+  modelRef: ((constraint: unknown) => unknown) | null = null;
   /** 3D part (sketches + feature history) -- see DocumentSnapshot.part. */
   part: unknown = undefined;
   sheets: unknown = undefined;
@@ -84,7 +89,9 @@ export class Document {
   toDict(): DocumentSnapshot {
     const snapshot: DocumentSnapshot = {
       entities: this.entities.map((e) => e.serialize()),
-      constraints: this.constraints,
+      // A copy: a snapshot must not change when a constraint is added or
+      // edited afterwards (undo would otherwise "restore" the new state).
+      constraints: structuredClone(this.constraints),
     };
     if (this.part !== undefined) snapshot.part = structuredClone(this.part);
     if (this.sheets !== undefined) snapshot.sheets = structuredClone(this.sheets);
@@ -96,7 +103,7 @@ export class Document {
   restoreFromDict(data: DocumentSnapshot): ParseResult {
     const result = parseEntities(data.entities);
     this.entities = result.entities;
-    this.constraints = data.constraints ?? [];
+    this.constraints = structuredClone(data.constraints ?? []);
     this.part = data.part === undefined ? undefined : structuredClone(data.part);
     this.sheets = data.sheets === undefined ? undefined : structuredClone(data.sheets);
     return result;

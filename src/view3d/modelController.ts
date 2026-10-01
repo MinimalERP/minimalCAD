@@ -22,7 +22,6 @@ import type { CommandBar } from "../ui/commandBar";
 import type { Engine } from "../engine/engine";
 import type { ModelAction } from "../ui/toolbar";
 import { showToast } from "../ui/toast";
-import { parseEntities } from "../core/document";
 import type { Point } from "../core/types";
 import type { Entity } from "../entities/entity";
 import type { HoleFeature, PartData, PlaneRef } from "../part/types";
@@ -30,7 +29,8 @@ import { DRAWING_SKETCH, emptyPart, isEdgeFeature, modelPlaneKind, nextId, parse
 import type { ModelPlaneRef } from "../part/types";
 import { rebuild, resolvePlane } from "../part/rebuild";
 import type { RebuildResult } from "../part/rebuild";
-import { projectBodies } from "../part/project";
+import { projectBodiesWithSources } from "../part/project";
+import { modelEdgeRef, modelRefResolver } from "../part/sketchRefs";
 import { axisName } from "../part/plane";
 import type { Frame } from "../part/plane";
 import { evalExpression } from "../part/params";
@@ -39,6 +39,7 @@ import { ModelView } from "./modelView";
 import type { ModelCommand, ModelContext } from "./commands/context";
 import { ExtrudeCommand } from "./commands/extrudeCommand";
 import { RevolveCommand } from "./commands/revolveCommand";
+import { PatternCommand } from "./commands/patternCommand";
 import { HoleCommand } from "./commands/holeCommand";
 import { EdgeBlendCommand } from "./commands/edgeBlendCommand";
 import { WorkPlaneCommand, planeAxes } from "./commands/workPlaneCommand";
@@ -58,6 +59,11 @@ export interface SketchReference {
   underlay: Entity[];
   /** UCS icon axis names (screen right, screen up). */
   labels: [string, string];
+  /** Finds the reference geometry a constraint measures from, as the solid
+   *  is now (Document.modelRef), and what to remember about an underlay
+   *  entity so that works (Engine.modelRefOf) -- see part/sketchRefs.ts. */
+  modelRef: (constraint: unknown) => Entity | null;
+  modelRefOf: (entity: Entity) => unknown;
 }
 
 const OPERATION_LABEL = { new: "New solid", join: "Join", cut: "Cut" } as const;
@@ -176,7 +182,7 @@ export class ModelController {
       if (used.has(s.id) && !alsoShow.has(s.id)) continue;
       const geo = this.result?.sketches.get(s.id);
       if (geo === undefined) continue;
-      list.push({ frame: geo.frame, polylines: entityPolylines(parseEntities(s.entities).entities) });
+      list.push({ frame: geo.frame, polylines: entityPolylines(geo.entities) }); // as rebuilt: constraints applied
     }
     this.view.setSketches(list);
   }
@@ -186,10 +192,16 @@ export class ModelController {
     this.refresh();
     const r = this.result;
     const frame = r === null ? null : resolvePlane(plane, r.planes, r.bodies);
-    if (r === null || frame === null) return { underlay: [], labels: ["X", "Y"] };
+    if (r === null || frame === null) return { underlay: [], labels: ["X", "Y"], modelRef: () => null, modelRefOf: () => undefined };
+    const sources = projectBodiesWithSources(r.bodies, frame);
     return {
-      underlay: projectBodies(r.bodies, frame),
+      underlay: sources.map((s) => s.entity),
       labels: [axisName(frame.u) || "u", axisName(frame.v) || "v"],
+      modelRef: modelRefResolver(sources),
+      modelRefOf: (entity) => {
+        const source = sources.find((s) => s.entity === entity);
+        return source === undefined ? undefined : (modelEdgeRef(source) ?? undefined);
+      },
     };
   }
 
@@ -216,6 +228,12 @@ export class ModelController {
         return this.run(() => RevolveCommand.start(this.ctx, null));
       case "hole":
         return this.run(() => HoleCommand.start(this.ctx, null));
+      case "pattern":
+        return this.run(() => PatternCommand.start(this.ctx, "rect", null));
+      case "circpattern":
+        return this.run(() => PatternCommand.start(this.ctx, "circular", null));
+      case "mirror3d":
+        return this.run(() => PatternCommand.start(this.ctx, "mirror", null));
       case "fillet":
       case "chamfer":
         return this.run(() => EdgeBlendCommand.start(this.ctx, action, null));
@@ -260,6 +278,9 @@ export class ModelController {
     if (["e", "ext", "extrude"].includes(t)) this.action("extrude");
     else if (["r", "rev", "revolve"].includes(t)) this.action("revolve");
     else if (["h", "hole"].includes(t)) this.action("hole");
+    else if (["pat", "pattern"].includes(t)) this.action("pattern");
+    else if (["cpat", "circular"].includes(t)) this.action("circpattern");
+    else if (["mir", "mirror"].includes(t)) this.action("mirror3d");
     else if (["f", "fillet"].includes(t)) this.action("fillet");
     else if (["ch", "cha", "chamfer"].includes(t)) this.action("chamfer");
     else if (["s", "sk", "sketch"].includes(t)) this.action("newsketch");
@@ -326,6 +347,7 @@ export class ModelController {
     if (f.type === "hole") this.run(() => HoleCommand.start(this.ctx, f));
     else if (isEdgeFeature(f)) this.run(() => EdgeBlendCommand.start(this.ctx, f.type, f));
     else if (f.type === "revolve") this.run(() => RevolveCommand.start(this.ctx, f));
+    else if (f.type === "pattern") this.run(() => PatternCommand.start(this.ctx, f.kind, f));
     else this.run(() => ExtrudeCommand.start(this.ctx, f));
   }
 
@@ -338,6 +360,11 @@ export class ModelController {
     }
     if (part.sketches.some((s) => s.plane.base === id)) {
       showToast(`${id} has sketches on it - delete them first.`);
+      return;
+    }
+    const user = part.features.find((f) => f.type === "pattern" && (f.features.includes(id) || f.plane === id));
+    if (user !== undefined) {
+      showToast(`${id} is used by ${user.id} - delete that first.`);
       return;
     }
     const exists = [...part.planes, ...part.sketches, ...part.features].some((x) => x.id === id);
@@ -386,6 +413,7 @@ export class ModelController {
       d.textContent = detail;
       r.append(i, name, d);
       r.addEventListener("click", () => {
+        if (this.active?.onTreePick?.(id) === true) return;
         this.selectedNode = id;
         this.renderBrowser(this.part());
         this.view.canvas.focus();
@@ -445,6 +473,20 @@ export class ModelController {
         row(f.id, f.id, `${what} · ${n} edge${n === 1 ? "" : "s"}`, f.type === "fillet" ? "◜" : "◸", () => this.editFeature(f.id), { error });
         continue;
       }
+      if (f.type === "pattern") {
+        const n = (e: string | undefined): string => {
+          const v = e === undefined ? null : evalExpression(e, this.params());
+          return v === null ? (e ?? "?") : `${+v.toFixed(3)}`;
+        };
+        const what =
+          f.kind === "mirror"
+            ? `in ${f.planeFace !== undefined ? `face of ${f.planeFace.feature}` : (f.plane ?? "?")}`
+            : f.kind === "circular"
+              ? `×${n(f.count1)} over ${n(f.angle ?? "360")}° about ${f.axisFace !== undefined ? `face of ${f.axisFace.feature}` : (f.dir1 ?? "Z")}`
+              : `${n(f.count1)} × ${n(f.spacing1)} mm along ${f.dir1 ?? "X"}${f.dir2 !== undefined ? `, ${n(f.count2)} × ${n(f.spacing2)} mm along ${f.dir2}` : ""}`;
+        row(f.id, f.id, `${f.features.join(", ")} ${what}`, f.kind === "mirror" ? "⇋" : f.kind === "circular" ? "❋" : "▦", () => this.editFeature(f.id), { error });
+        continue;
+      }
       sketchRow(f.sketch);
       if (f.type === "revolve") {
         const deg = evalExpression(f.angle, this.params());
@@ -453,7 +495,7 @@ export class ModelController {
         continue;
       }
       const value = evalExpression(f.distance, this.params());
-      const amount = f.extent === "through" ? "through all" : value === null ? f.distance : `${+value.toFixed(3)} mm`;
+      const amount = f.extent === "through" ? "through all" : f.extent === "toFace" ? `to face of ${f.toFace?.feature ?? "?"}` : value === null ? f.distance : `${+value.toFixed(3)} mm`;
       const from = f.sketch === DRAWING_SKETCH ? " (2D)" : "";
       const deg = (e: string | undefined, label: string): string => {
         const v = e === undefined ? 0 : evalExpression(e, this.params());

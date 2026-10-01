@@ -123,8 +123,9 @@ export type ExtrudeDirection = "normal" | "reverse" | "symmetric";
 /** New solid, merge into the solids it touches, or remove material. */
 export type FeatureOperation = "new" | "join" | "cut";
 
-/** A fixed distance, or all the way through the existing model. */
-export type ExtrudeExtent = "distance" | "through";
+/** A fixed distance, all the way through the existing model, or up to a
+ *  flat face of it. */
+export type ExtrudeExtent = "distance" | "through" | "toFace";
 
 export interface ExtrudeFeature {
   id: string;
@@ -140,6 +141,8 @@ export interface ExtrudeFeature {
   operation: FeatureOperation;
   /** Absent = "distance" (older files). */
   extent?: ExtrudeExtent;
+  /** Extent "toFace": the flat face the extrusion stops at. */
+  toFace?: TopoRef;
   /** Expression, degrees: the sides slope IN by this much as they leave the
    *  sketch plane (negative = flare out). Absent = straight sides. */
   taper?: string;
@@ -275,7 +278,38 @@ export interface EdgeFeature {
   suppressed?: boolean;
 }
 
-export type FeatureData = ExtrudeFeature | RevolveFeature | HoleFeature | EdgeFeature;
+export type PatternAxis = "X" | "Y" | "Z";
+
+/** Repeats earlier features: in rows / columns ("rect"), round an axis
+ *  ("circular"), or reflected in a plane ("mirror"). See part/pattern.ts. */
+export interface PatternFeature {
+  id: string;
+  type: "pattern";
+  kind: "rect" | "circular" | "mirror";
+  /** Ids of the (earlier) features to repeat. */
+  features: string[];
+  /** rect: first direction. circular: the axis, through the origin (unless axisFace). */
+  dir1?: PatternAxis;
+  /** rect: how many along dir1 (the original included). circular: how many in all. */
+  count1?: string;
+  /** rect: spacing along dir1 (mm expression). */
+  spacing1?: string;
+  /** rect: optional second direction, with its own count and spacing. */
+  dir2?: PatternAxis;
+  count2?: string;
+  spacing2?: string;
+  /** circular: total angle (degrees expression; default 360 = evenly all round). */
+  angle?: string;
+  /** circular: turn about this round face's axis instead of an origin axis. */
+  axisFace?: TopoRef;
+  /** mirror: an origin plane ("XY" / "XZ" / "YZ") or a work plane's id... */
+  plane?: string;
+  /** ...or a flat face of the solid. */
+  planeFace?: TopoRef;
+  suppressed?: boolean;
+}
+
+export type FeatureData = ExtrudeFeature | RevolveFeature | HoleFeature | EdgeFeature | PatternFeature;
 
 /** Features built from a sketch's closed shapes. */
 export type SketchFeature = ExtrudeFeature | RevolveFeature;
@@ -407,6 +441,30 @@ function parseFeature(raw: unknown): FeatureData | null {
     }
     return f;
   }
+  if (raw.type === "pattern" && Array.isArray(raw.features)) {
+    const axis = (v: unknown): PatternAxis | undefined => (v === "X" || v === "Y" || v === "Z" ? v : undefined);
+    const str = (v: unknown): string | undefined => (typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined);
+    const f: PatternFeature = {
+      id: raw.id,
+      type: "pattern",
+      kind: raw.kind === "circular" || raw.kind === "mirror" ? raw.kind : "rect",
+      features: raw.features.filter((x): x is string => typeof x === "string"),
+      suppressed: raw.suppressed === true,
+    };
+    for (const k of ["dir1", "dir2"] as const) {
+      const v = axis(raw[k]);
+      if (v !== undefined) f[k] = v;
+    }
+    for (const k of ["count1", "spacing1", "count2", "spacing2", "angle", "plane"] as const) {
+      const v = str(raw[k]);
+      if (v !== undefined) f[k] = v;
+    }
+    for (const k of ["axisFace", "planeFace"] as const) {
+      const v = parseTopoRef(raw[k]);
+      if (v !== null) f[k] = v;
+    }
+    return f;
+  }
   if (raw.type === "hole" && isObject(raw.face)) {
     const f = raw.face;
     if (typeof f.feature !== "string" || typeof f.index !== "string" || typeof f.role !== "string") return null;
@@ -464,6 +522,7 @@ function parseFeature(raw: unknown): FeatureData | null {
       direction,
       operation: raw.operation === "join" || raw.operation === "cut" ? raw.operation : "new",
       ...(raw.extent === "through" ? { extent: "through" as const } : {}),
+      ...(raw.extent === "toFace" && parseTopoRef(raw.toFace) !== null ? { extent: "toFace" as const, toFace: parseTopoRef(raw.toFace)! } : {}),
       ...Object.fromEntries(
         (["taper", "lean", "leanToward"] as const).flatMap((k) => (typeof raw[k] === "string" || typeof raw[k] === "number" ? [[k, String(raw[k])]] : [])),
       ),

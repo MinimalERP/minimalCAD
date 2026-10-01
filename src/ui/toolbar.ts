@@ -58,6 +58,12 @@ const DISPLAY_NAMES: Record<string, string> = {
   insertlib: "Insert from Library",
   savelib: "Save to Library",
   constrain: "Constrain Distance",
+  horizontal: "Horizontal - keep a line level",
+  vertical: "Vertical - keep a line upright",
+  parallel: "Parallel - keep a line parallel to another",
+  perpendicular: "Perpendicular - keep a line square to another",
+  equal: "Equal - keep two lines the same length, or two circles the same size",
+  coincident: "Coincident - keep a point on another point",
   pdfexport: "Export PDF",
 };
 
@@ -80,8 +86,8 @@ const COMMAND_GROUPS: readonly (readonly string[])[] = [
     "join",
     "explode",
     "scale",
-    "constrain",
   ],
+  ["constrain", "horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident"],
   ["linear", "aligned", "angular", "diameter", "radius", "leader"],
   ["pdfexport", "insertlib", "savelib"],
 ];
@@ -91,15 +97,16 @@ const COMMAND_GROUPS: readonly (readonly string[])[] = [
  *  drafting-only. */
 const SKETCH_GROUPS: readonly (readonly string[])[] = [
   ["line", "arc", "rectangle", "circle", "ellipse"],
-  ["trim", "offset", "mirror", "fillet", "chamfer", "move", "copy", "rotate", "join", "explode", "constrain"],
+  ["trim", "offset", "mirror", "fillet", "chamfer", "move", "copy", "rotate", "join", "explode"],
+  ["constrain", "horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident"],
   ["linear", "aligned", "angular", "diameter", "radius"],
 ];
 
 /** 3D-workspace actions (handled by the lazily-loaded model module). */
-export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "fillet" | "chamfer" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
+export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "pattern" | "circpattern" | "mirror3d" | "fillet" | "chamfer" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
 
 /** Drawing-tab actions (handled by the lazily-loaded drawing module). */
-export type DrawingToolAction = "sheet" | "baseview" | "projview" | "moveview" | "editview" | "deleteview" | "print" | "fit";
+export type DrawingToolAction = "sheet" | "baseview" | "projview" | "sectionview" | "moveview" | "editview" | "deleteview" | "print" | "fit";
 
 /** Annotation tools offered on a drawing sheet. */
 const DRAWING_GROUPS: readonly (readonly string[])[] = [
@@ -205,6 +212,9 @@ export function buildToolbar(
   addUtilityButton(model, "chamfer3d", "Chamfer (CH) - bevel edges: click edges, or a face for all its edges", () =>
     host.modelAction("chamfer"),
   );
+  addUtilityButton(model, "pattern", "Rectangular Pattern (PAT) - repeat features in rows and columns", () => host.modelAction("pattern"));
+  addUtilityButton(model, "circpattern", "Circular Pattern (CPAT) - repeat features round an axis", () => host.modelAction("circpattern"));
+  addUtilityButton(model, "mirror3d", "Mirror (MIR) - copy features across a plane", () => host.modelAction("mirror3d"));
   model.appendChild(gap());
   addUtilityButton(model, "viewfront", "Front view", () => host.modelAction("viewfront"));
   addUtilityButton(model, "viewtop", "Top view", () => host.modelAction("viewtop"));
@@ -243,6 +253,9 @@ export function buildToolbar(
   );
   addUtilityButton(drawing, "projview", "Projected View - click a view, then place views around it", () =>
     host.drawingAction("projview"),
+  );
+  addUtilityButton(drawing, "sectionview", "Section View - click a view where to cut, then place the section beside it", () =>
+    host.drawingAction("sectionview"),
   );
   addUtilityButton(drawing, "moveview", "Move View (projected views stay in line)", () => host.drawingAction("moveview"));
   addUtilityButton(drawing, "editview", "Edit View - scale, hidden lines, label", () => host.drawingAction("editview"));

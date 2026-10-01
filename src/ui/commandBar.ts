@@ -32,6 +32,7 @@ export class CommandBar extends EventTarget {
   private angleField: HTMLInputElement;
   private snapLabel: HTMLSpanElement;
   private orthoLabel: HTMLSpanElement;
+  private overlayLabel: HTMLSpanElement;
 
   private dualMode = false;
   private fieldLocked = false;
@@ -99,6 +100,13 @@ export class CommandBar extends EventTarget {
     this.orthoLabel.title = "Toggle Ortho (F8)";
     this.orthoLabel.addEventListener("click", () => this.dispatchEvent(new CustomEvent("orthoClicked")));
 
+    // Sizes / constraints shown on the drawing: ALL, SEL(ected shape only), OFF.
+    this.overlayLabel = document.createElement("span");
+    this.overlayLabel.className = "ortho-label overlay-label";
+    this.overlayLabel.title = "Sizes and constraints on the drawing: all / selected shape only / off (click to change)";
+    this.overlayLabel.addEventListener("mousedown", (e) => e.preventDefault()); // keep the caret where it is
+    this.overlayLabel.addEventListener("click", () => this.dispatchEvent(new CustomEvent("overlayClicked")));
+
     this.suggestionsList = document.createElement("div");
     this.suggestionsList.className = "suggestions-list";
     this.suggestionsList.hidden = true;
@@ -125,6 +133,7 @@ export class CommandBar extends EventTarget {
       this.angleMarker,
       this.angleField,
       this.snapLabel,
+      this.overlayLabel,
       this.orthoLabel,
     );
 
@@ -369,6 +378,12 @@ export class CommandBar extends EventTarget {
 
   setOrtho(enabled: boolean): void {
     this.orthoLabel.classList.toggle("enabled", enabled);
+  }
+
+  /** The CONS button's text ("CONS: ALL" ...); lit unless it is off. */
+  setOverlay(text: string, on: boolean): void {
+    this.overlayLabel.textContent = text;
+    this.overlayLabel.classList.toggle("enabled", on);
   }
 
   // --- Private wiring ---

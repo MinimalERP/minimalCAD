@@ -7,9 +7,14 @@
  * one bad edit can't make the rest of the model disappear.
  */
 
-import { parseEntities } from "../core/document";
+import { Document, parseEntities } from "../core/document";
+import { enforceConstraints } from "../core/constraints";
+import { projectBodiesWithSources } from "./project";
+import { modelRefResolver } from "./sketchRefs";
 import { extrudeRegions } from "./kernel/extrude";
 import { extrudeShaped } from "./kernel/extrudeShaped";
+import type { MadeTool } from "./pattern";
+import { patternTools, patternTransforms } from "./pattern";
 import { revolveRegions } from "./kernel/revolveRegion";
 import type { AxisLine } from "./kernel/revolveRegion";
 import type { Point } from "../core/types";
@@ -22,7 +27,7 @@ import type { Body, TopoRef } from "./kernel/types";
 import type { Surface } from "./cylFrame";
 import { cylFrame, isCyl } from "./cylFrame";
 import { dot, length, scale, sub } from "./vec3";
-import { faceHasRef } from "./kernel/types";
+import { faceHasRef, isPlaneRef } from "./kernel/types";
 import { resolveParameters, evalExpression } from "./params";
 import { faceFrame, offsetFrame, planeFrame, toLocal, workPlaneFrame } from "./plane";
 import type { Frame } from "./plane";
@@ -57,9 +62,15 @@ export interface SketchGeometry {
   profiles: ProfileResult;
   /** Every straight line of the sketch (plane-local): Revolve axis candidates. */
   lines: [Point, Point][];
+  /** The sketch's entities with its constraints applied against the solid
+   *  as it stood when the sketch was resolved. */
+  entities: Entity[];
 }
 
 export interface RebuildResult {
+  /** Each feature's own tool solids and how they were applied (what a
+   *  Pattern / Mirror repeats). */
+  made: Map<string, MadeTool[]>;
   bodies: Body[];
   status: Map<string, FeatureStatus>;
   sketches: Map<string, SketchGeometry>;
@@ -80,9 +91,23 @@ export function sketchLines(entities: readonly Entity[]): [Point, Point][] {
   return out;
 }
 
-export function sketchGeometry(sketch: SketchData, frame: Frame): SketchGeometry {
-  const { entities } = parseEntities(sketch.entities);
-  return { sketch, frame, profiles: findProfiles(entities), lines: sketchLines(entities) };
+/**
+ * A sketch's geometry on `frame`. Its constraints are re-applied first --
+ * those measured from the solid against `bodies` as they stand -- so a
+ * shape held 20 from an edge is still 20 from it after the solid changed.
+ */
+export function sketchGeometry(sketch: SketchData, frame: Frame, bodies: readonly Body[] = []): SketchGeometry {
+  let entities: Entity[];
+  if (sketch.constraints.length === 0) entities = parseEntities(sketch.entities).entities;
+  else {
+    const doc = new Document();
+    doc.restoreFromDict({ entities: sketch.entities, constraints: structuredClone(sketch.constraints) });
+    const needsModel = sketch.constraints.some((c) => typeof c === "object" && c !== null && "ref_model" in c);
+    if (needsModel && bodies.length > 0) doc.modelRef = modelRefResolver(projectBodiesWithSources(bodies, frame));
+    enforceConstraints(doc);
+    entities = doc.getEntities();
+  }
+  return { sketch, frame, profiles: findProfiles(entities), lines: sketchLines(entities), entities };
 }
 
 /**
@@ -257,7 +282,10 @@ export function extrudeTool(
   h0: number,
   h1: number,
   params: ReadonlyMap<string, number>,
+  /** Extent "to face": the plane to stop at (h0 / h1 are then unused). */
+  upTo?: { origin: Vec3; normal: Vec3 },
 ): Body | string {
+  if (upTo !== undefined) return extrudeShaped(feature.id, regions, frame, 0, 1, { tanTaper: 0, shear: { x: 0, y: 0 }, square: false, upTo });
   const value = (e: string | undefined): number | null => (e === undefined || e.trim() === "" ? 0 : evalExpression(e, params));
   const taper = value(feature.taper);
   const lean = value(feature.lean);
@@ -273,6 +301,17 @@ export function extrudeTool(
     shear: lean === 0 ? { x: 0, y: 0 } : { x: t * Math.cos(a), y: t * Math.sin(a) },
     square: feature.section === "square",
   });
+}
+
+/** The plane of the flat face an Extrude stops at, or why it can't be used. */
+export function upToPlane(bodies: readonly Body[], ref: TopoRef | undefined): { origin: Vec3; normal: Vec3 } | string {
+  if (ref === undefined) return "Pick the face to extrude up to";
+  for (const body of bodies) {
+    const face = body.faces.find((f) => faceHasRef(f, ref));
+    if (face === undefined) continue;
+    return face.geom.kind === "plane" ? { origin: face.geom.origin, normal: face.geom.normal } : "The face to extrude up to must be flat";
+  }
+  return "The face this extrusion stops at no longer exists";
 }
 
 /** The tab's 2D drafting drawing as the part's XY base sketch. */
@@ -352,14 +391,26 @@ export function applyOperation(bodies: Body[], tool: Body, operation: ExtrudeFea
 }
 
 /** Drills a Hole feature into the bodies (in place). */
-function applyHole(feature: HoleFeature, bodies: Body[], params: ReadonlyMap<string, number>): FeatureStatus {
-  const surface = faceSurfaceOf(bodies, feature.face);
+function applyHole(
+  feature: HoleFeature,
+  bodies: Body[],
+  params: ReadonlyMap<string, number>,
+  made: Map<string, MadeTool[]>,
+  plane: (key: string) => Frame | null,
+): FeatureStatus {
+  // On a work plane: drilled from the plane's front, square to it (or leaning).
+  const onPlane = isPlaneRef(feature.face);
+  const surface = onPlane ? plane(feature.face.feature) : faceSurfaceOf(bodies, feature.face);
   if (surface === null || isCyl(surface) !== (feature.placement === "radial")) {
-    return { ok: false, error: "The face this hole is on no longer exists" };
+    return { ok: false, error: onPlane ? `The work plane this hole is on (${feature.face.feature}) is missing or broken` : "The face this hole is on no longer exists" };
   }
   if (feature.centers.length === 0) return { ok: false, error: "No hole centres" };
   const tools = holeTools(feature, surface, params, surfaceThroughLength(bodies, surface));
   if (typeof tools === "string") return { ok: false, error: tools };
+  made.set(
+    feature.id,
+    tools.map((tool) => ({ tool, op: "cut" as const })),
+  );
   let removedAny = false;
   for (const tool of tools) {
     if (applyOperation(bodies, tool, "cut").ok) removedAny = true;
@@ -398,19 +449,50 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
     if (wp?.on !== undefined && !planes.has(wp.id)) planes.set(wp.id, resolveModelPlane(wp, bodies, params));
     const frame = resolvePlane(sketch.plane, planes, bodies);
     if (frame === null) return undefined;
-    const geo = sketchGeometry(sketch, frame);
+    const geo = sketchGeometry(sketch, frame, bodies);
     sketches.set(id, geo);
     return geo;
   };
 
   const status = new Map<string, FeatureStatus>();
+  const made = new Map<string, MadeTool[]>();
+  /** Applies a feature's tool (or reports why there is none), remembering it for patterns. */
+  const use = (id: string, tool: Body | string, op: ExtrudeFeature["operation"]): FeatureStatus => {
+    if (typeof tool === "string") return { ok: false, error: tool };
+    made.set(id, [...(made.get(id) ?? []), { tool, op }]);
+    return applyOperation(bodies, tool, op);
+  };
+  /** An origin plane or a work plane, by name (a plane tied to the model is fixed on first use). */
+  const namedPlane = (key: string): Frame | null => {
+    if (isBasePlane(key)) return planeFrame({ base: key, offset: 0 });
+    const wp = part.planes.find((p) => p.id === key);
+    if (wp?.on !== undefined && !planes.has(wp.id)) planes.set(wp.id, resolveModelPlane(wp, bodies, params));
+    return planes.get(key)?.frame ?? null;
+  };
   for (const feature of part.features) {
     if (feature.suppressed === true) {
       status.set(feature.id, { ok: true });
       continue;
     }
+    if (feature.type === "pattern") {
+      const sources = feature.features.flatMap((id) => made.get(id) ?? []);
+      const transforms = patternTransforms(feature, { params, bodies, plane: namedPlane });
+      if (typeof transforms === "string") status.set(feature.id, { ok: false, error: transforms });
+      else if (sources.length === 0) status.set(feature.id, { ok: false, error: "Nothing to repeat - its features are gone, failed, or can't be patterned" });
+      else {
+        const tools = patternTools(feature, sources, transforms);
+        made.set(feature.id, tools);
+        // Additions first, then cuts: a patterned boss with a hole in it keeps its hole.
+        let applied = false;
+        for (const t of [...tools.filter((x) => x.op !== "cut"), ...tools.filter((x) => x.op === "cut")]) {
+          if (applyOperation(bodies, t.tool, t.op).ok) applied = true;
+        }
+        status.set(feature.id, applied ? { ok: true } : { ok: false, error: "None of the copies touch the solid" });
+      }
+      continue;
+    }
     if (feature.type === "hole") {
-      status.set(feature.id, applyHole(feature, bodies, params));
+      status.set(feature.id, applyHole(feature, bodies, params, made, namedPlane));
       continue;
     }
     if (isEdgeFeature(feature)) {
@@ -440,7 +522,13 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
         continue;
       }
       const tool = revolveRegions(feature.id, regions, geo.frame, resolveRevolveAxis(feature.axis, geo.lines), sweep[0], sweep[1]);
-      status.set(feature.id, typeof tool === "string" ? { ok: false, error: tool } : applyOperation(bodies, tool, feature.operation));
+      status.set(feature.id, use(feature.id, tool, feature.operation));
+      continue;
+    }
+    if (feature.extent === "toFace") {
+      const plane = upToPlane(bodies, feature.toFace);
+      const tool = typeof plane === "string" ? plane : extrudeTool(feature, regions, geo.frame, 0, 1, params, plane);
+      status.set(feature.id, use(feature.id, tool, feature.operation));
       continue;
     }
     const through = feature.extent === "through";
@@ -452,10 +540,10 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
     // Through all: the tool reaches past the model in the chosen direction(s).
     const [h0, h1] = through && feature.direction === "symmetric" ? [-distance, distance] : extrudeExtent(feature.direction, distance);
     const tool = extrudeTool(feature, regions, geo.frame, h0, h1, params);
-    status.set(feature.id, typeof tool === "string" ? { ok: false, error: tool } : applyOperation(bodies, tool, feature.operation));
+    status.set(feature.id, use(feature.id, tool, feature.operation));
   }
   for (const sketch of part.sketches) resolveSketch(sketch.id);
   for (const wp of part.planes) if (wp.on !== undefined && !planes.has(wp.id)) planes.set(wp.id, resolveModelPlane(wp, bodies, params));
-  return { bodies, status, sketches, planes, params };
+  return { made, bodies, status, sketches, planes, params };
 }
 

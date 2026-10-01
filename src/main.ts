@@ -13,6 +13,7 @@
  * rebuilt on every tab switch.
  */
 
+import { OVERLAY_LABEL, cycleOverlayMode, overlayMode } from "./ui/overlayMode";
 import "./style.css";
 import { CanvasView } from "./ui/canvasView";
 import { CommandBar } from "./ui/commandBar";
@@ -175,6 +176,14 @@ commandBar.addEventListener("inputDisabled", () => (workspace.isModel() ? glCanv
 commandBar.addEventListener("orthoClicked", () => {
   getActiveEngine().toggleOrtho();
 });
+// CONS (next to ORTHO): how much of the sizes / constraints overlay shows.
+const showOverlayMode = (): void => commandBar.setOverlay(OVERLAY_LABEL[overlayMode()], overlayMode() !== "off");
+commandBar.addEventListener("overlayClicked", () => {
+  cycleOverlayMode();
+  showOverlayMode();
+  requestRedraw();
+});
+showOverlayMode();
 
 // Built before CanvasView so the toolbar's real, final layout (which may
 // wrap to a second row -- there are enough commands now that it can) is
@@ -331,6 +340,23 @@ const mobileControls: [string, () => void][] = [
   ["mobile-escape", () => dispatchSyntheticKey("Escape")],
   ["mobile-enter", () => dispatchSyntheticKey("Enter")],
 ];
+// Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z) in every workspace -- 2D, sketch, 3D,
+// drawing sheet. A text box with something typed in it keeps the browser's
+// own undo for its text.
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const key = e.key.toLowerCase();
+  const redo = key === "y" || (key === "z" && e.shiftKey);
+  if (key !== "z" && !redo) return;
+  const t = e.target;
+  if ((t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) && t.value !== "") return;
+  e.preventDefault();
+  if (redo) getActiveEngine().redoAction();
+  else getActiveEngine().undoAction();
+  workspace.documentChanged();
+  view.requestRedraw();
+});
+
 for (const [id, action] of mobileControls) {
   const btn = document.getElementById(id);
   if (btn === null) continue;

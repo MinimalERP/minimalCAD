@@ -39,9 +39,10 @@ import type { Engine } from "../engine/engine";
 import type { GripCommand } from "../commands/types";
 import { Text } from "../entities/text";
 import { Dimension } from "../entities/dimension";
-import { constraintAt, constraintLinePoints, constraintValue, setConstraintDistance } from "../core/constraints";
+import { constraintAt, constraintLinePoints, constraintValue, enforceConstraints, entityById, featurePoint, isDrivable, kindOf, setConstraintDistance } from "../core/constraints";
 import { applySize, formatSize, sizeLabelsOf } from "../core/sizeLabels";
 import { evalNumber } from "../input/dynamicInput";
+import { overlayMode } from "./overlayMode";
 import type { Constraint } from "../core/constraints";
 import { copySelection, pasteClipboard } from "../engine/clipboard";
 
@@ -55,6 +56,15 @@ const SNAP_MARKER_SCREEN_SIZE = 9.0;
 const COLOR_CONSTRAINT = "#c586c0";
 const COLOR_CONSTRAINT_ACTIVE = "#ff69ff";
 const COLOR_SIZE_LABEL = "#7fd0e8";
+/** The tag drawn by an entity for each geometric constraint on it. */
+const CONSTRAINT_GLYPH: Record<Exclude<import("../core/constraints").ConstraintKind, "distance">, string> = {
+  horizontal: "H",
+  vertical: "V",
+  parallel: "//",
+  perpendicular: "⊥",
+  equal: "=",
+  coincident: "●",
+};
 /** How far (screen px) a size label sits off its geometry. */
 const SIZE_LABEL_OFFSET = 14;
 /** A 2D drawing with up to this many entities shows every shape's sizes. */
@@ -479,6 +489,16 @@ export class CanvasView {
       clicked.edit();
       return;
     }
+    // A geometric constraint's glyph: select it (Delete then removes it).
+    const glyph = this.constraintGlyphs.find((l) => sp.x >= l.x && sp.x <= l.x + l.w && sp.y >= l.y && sp.y <= l.y + l.h);
+    if (glyph !== undefined) {
+      this.engine.selection.clear();
+      this.engine.quickEdit.refreshStatus();
+      this.engine.activeConstraintId = glyph.id;
+      this.engine.commandBar.setStatus("CONSTRAINT", `${glyph.name} - press Delete to remove it`);
+      this.requestRedraw();
+      return;
+    }
     this.freshIds.clear(); // moved on: only the selection shows its sizes now
 
     const tolerance = this.engine.pickTolerance();
@@ -513,7 +533,8 @@ export class CanvasView {
       // Only checked once a normal entity/grip hit-test comes up empty, so a
       // faint constraint line never steals a click away from real geometry
       // it happens to run alongside (see core/constraints.ts's constraintAt).
-      const constraint = constraintAt(this.engine.document, worldPos, tolerance);
+      const found = constraintAt(this.engine.document, worldPos, tolerance);
+      const constraint = found !== null && this.constraintShown(found) ? found : null; // a hidden line can't be clicked
       if (constraint !== null) {
         this.engine.selection.clear();
         this.engine.quickEdit.refreshStatus();
@@ -1036,6 +1057,10 @@ export class CanvasView {
     ctx.fillStyle = COLOR_BACKGROUND;
     ctx.fillRect(0, 0, width, height);
 
+    // Constraints are live: whatever moved since the last frame, everything
+    // constrained settles back to where its constraints put it.
+    if (this.engine.document.constraints.length > 0) enforceConstraints(this.engine.document);
+
     if (this.engine.backdrop !== null) this.engine.backdrop(ctx);
     else this.drawGrid();
     if (!this.engine.underlayHidden) this.drawUnderlay();
@@ -1203,6 +1228,18 @@ export class CanvasView {
    *  (Engine.activeConstraintId, set in runPointerDown's own fallback pick)
    *  drawn brighter/thicker, matching the desktop app's own selected-
    *  constraint highlight on graphics/canvas.py. */
+  /** Whether a constraint is drawn under the current CONS mode: all of
+   *  them, only those on the selected / just-drawn shape (and the one
+   *  picked), or none. */
+  private constraintShown(constraint: Constraint): boolean {
+    const mode = overlayMode();
+    if (mode === "all") return true;
+    if (mode === "off") return false;
+    if (constraint.id === this.engine.activeConstraintId) return true;
+    const driven = entityById(this.engine.document, constraint.driven_entity_id);
+    return driven !== null && (this.engine.selection.isSelected(driven) || this.freshIds.has(driven));
+  }
+
   private drawConstraints(): void {
     const constraints = this.engine.document.constraints as Constraint[];
     if (constraints.length === 0) return;
@@ -1211,6 +1248,7 @@ export class CanvasView {
     ctx.save();
     ctx.setLineDash([5, 4]);
     for (const constraint of constraints) {
+      if (!this.constraintShown(constraint)) continue;
       const pts = constraintLinePoints(this.engine.document, constraint);
       if (pts === null) continue;
       const active = constraint.id === this.engine.activeConstraintId;
@@ -1232,6 +1270,8 @@ export class CanvasView {
    *  until the next idle click). A big jump -- a file opened, a paste -- is
    *  not someone drawing: nothing is marked. */
   private valueEditor: { close(): void } | null = null;
+  /** Geometric-constraint glyphs drawn in the last frame, as screen boxes. */
+  private constraintGlyphs: { x: number; y: number; w: number; h: number; id: string; name: string }[] = [];
 
   /**
    * A small text box right on the clicked value (an entity's size, a
@@ -1353,8 +1393,9 @@ export class CanvasView {
     // Always on, unless the drawing is big (an imported layout would drown
     // in numbers): then only the selected / just-drawn shapes show theirs.
     const entities = doc.getEntities();
-    const all = engine.sizeLabelMode === "all" || entities.length <= SIZE_LABELS_ALWAYS_UP_TO;
-    for (const entity of entities) {
+    const mode = overlayMode(); // the command bar's CONS button
+    const all = mode === "all" && (engine.sizeLabelMode === "all" || entities.length <= SIZE_LABELS_ALWAYS_UP_TO);
+    for (const entity of mode === "off" ? [] : entities) {
       if (!all && !engine.selection.isSelected(entity) && !this.freshIds.has(entity)) continue;
       for (const label of sizeLabelsOf(entity)) {
         const a = this.viewport.worldToScreen(label.anchor);
@@ -1369,6 +1410,7 @@ export class CanvasView {
     }
 
     for (const constraint of doc.constraints as Constraint[]) {
+      if (!this.constraintShown(constraint)) continue;
       const pts = constraintLinePoints(doc, constraint);
       const value = constraintValue(doc, constraint);
       if (pts === null || value === null) continue;
@@ -1383,6 +1425,31 @@ export class CanvasView {
         if (error === null) engine.undo.push(before);
         return error;
       });
+    }
+    // Geometric constraints: a small lettered tag by the entity they hold.
+    this.constraintGlyphs = [];
+    const stacked = new Map<string, number>();
+    for (const constraint of doc.constraints as Constraint[]) {
+      const kind = kindOf(constraint);
+      if (kind === "distance" || !this.constraintShown(constraint)) continue;
+      const driven = entityById(doc, constraint.driven_entity_id);
+      if (driven === null || !isDrivable(driven)) continue;
+      const at = kind === "coincident" ? featurePoint(driven, constraint.driven_feature) : featurePoint(driven, "mid");
+      const s = this.viewport.worldToScreen(at);
+      const n = stacked.get(constraint.driven_entity_id) ?? 0;
+      stacked.set(constraint.driven_entity_id, n + 1);
+      const text = CONSTRAINT_GLYPH[kind];
+      const w = Math.max(15, ctx.measureText(text).width + 8);
+      const box = { x: s.x - w / 2 + n * (w + 2), y: s.y + 8, w, h: 15 };
+      const active = constraint.id === engine.activeConstraintId;
+      ctx.fillStyle = active ? COLOR_CONSTRAINT_ACTIVE : "rgba(60, 34, 60, 0.9)";
+      ctx.fillRect(box.x, box.y, box.w, box.h);
+      ctx.strokeStyle = active ? "#ffffff" : COLOR_CONSTRAINT;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w - 1, box.h - 1);
+      ctx.fillStyle = active ? "#101010" : "#f0d0f0";
+      ctx.fillText(text, box.x + box.w / 2, box.y + box.h / 2 + 0.5);
+      this.constraintGlyphs.push({ ...box, id: constraint.id, name: kind[0]!.toUpperCase() + kind.slice(1) });
     }
     ctx.restore();
   }

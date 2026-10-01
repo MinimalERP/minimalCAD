@@ -24,6 +24,7 @@ import type { Vec3 } from "../part/vec3";
 import { cross, dot, normalize, scale as vscale } from "../part/vec3";
 import type { ViewAxes, ViewCurve, ViewResult } from "./hlr";
 import { viewBodies } from "./hlr";
+import { sectionBodies, sectionHatch } from "./section";
 
 export type Paper = "A4" | "A2";
 /** Landscape sizes, mm. */
@@ -62,6 +63,10 @@ export interface SheetView {
   /** "shaded": the part's faces filled with light and shade (hidden lines
    *  are then never drawn). Default: lines only. */
   style?: ViewStyle;
+  /** A SECTION view: the part cut by the plane through `at` square to this
+   *  view's direction (what is nearer the viewer is removed), the cut faces
+   *  hatched. `name` is its letter: "SECTION A-A". */
+  section?: { at: Vec3; name: string };
 }
 
 export type ViewStyle = "lines" | "shaded";
@@ -324,11 +329,25 @@ export class ViewCache {
   private bodies: readonly Body[] | null = null;
   private map = new Map<string, ViewResult>();
   private shadeMap = new Map<string, ShadedPatch[]>();
+  /** Per section plane: the cut bodies, and their own view cache. */
+  private cuts = new Map<string, { bodies: Body[]; cache: ViewCache }>();
   private sync(bodies: readonly Body[]): void {
     if (bodies === this.bodies) return;
     this.bodies = bodies;
     this.map.clear();
     this.shadeMap.clear();
+    this.cuts.clear();
+  }
+  /** `bodies` cut for a section through `at` seen along `axes` (cached). */
+  cut(bodies: readonly Body[], at: Vec3, axes: ViewAxes): { bodies: Body[]; cache: ViewCache } {
+    this.sync(bodies);
+    const key = `${this.key(axes)}|${[at.x, at.y, at.z].map((n) => n.toFixed(9)).join(",")}`;
+    let hit = this.cuts.get(key);
+    if (hit === undefined) {
+      hit = { bodies: sectionBodies(bodies, at, axes), cache: new ViewCache() };
+      this.cuts.set(key, hit);
+    }
+    return hit;
   }
   private key(axes: ViewAxes): string {
     const r = (v: Vec3): string => [v.x, v.y, v.z].map((n) => n.toFixed(9)).join(",");
@@ -578,6 +597,43 @@ function viewPrims(res: ViewResult, view: SheetView, at: ViewPlacement, prims: P
   }
 }
 
+/** Hatch line spacing on a cut face, paper mm. */
+const HATCH_SPACING = 2.5;
+
+/**
+ * A section's cutting line on its parent view: a chain line where the
+ * plane cuts, running a little past the view, with an arrow at each end
+ * showing which way the section looks and the section's letter beside it.
+ */
+function cuttingLine(section: SheetView, parent: SheetView, at: ViewPlacement, prims: Prim[]): void {
+  const s = section.section!;
+  const a = axesOf(parent);
+  const centre = at.toWorld({ x: dot(s.at, a.right), y: dot(s.at, a.up) });
+  // The section looks along -dir; on the parent's paper that is across the line.
+  const look = { x: -dot(section.dir, a.right), y: dot(section.dir, a.up) }; // world (Y down)
+  const len = Math.hypot(look.x, look.y);
+  if (len < 1e-6) return; // not square to the parent: no line to show
+  const l = { x: look.x / len, y: look.y / len };
+  const along = { x: -l.y, y: l.x };
+  const [x0, y0, x1, y1] = at.box;
+  const over = 6;
+  const half = Math.abs(along.x) > Math.abs(along.y) ? (x1 - x0) / 2 + over : (y1 - y0) / 2 + over;
+  const mid = Math.abs(along.x) > Math.abs(along.y) ? { x: (x0 + x1) / 2, y: centre.y } : { x: centre.x, y: (y0 + y1) / 2 };
+  const end = (sign: number): Point => ({ x: mid.x + along.x * half * sign, y: mid.y + along.y * half * sign });
+  prims.push({ kind: "line", a: end(-1), b: end(1), pen: "center" });
+  for (const sign of [-1, 1]) {
+    const e = end(sign);
+    // A heavy end stroke, then the arrow pointing the way the section looks.
+    prims.push({ kind: "line", a: e, b: { x: e.x - along.x * 5 * sign, y: e.y - along.y * 5 * sign }, pen: "border" });
+    const tip = { x: e.x + l.x * 8, y: e.y + l.y * 8 };
+    prims.push({ kind: "line", a: e, b: tip, pen: "frame" });
+    for (const w of [-1, 1]) {
+      prims.push({ kind: "line", a: tip, b: { x: tip.x - l.x * 2.5 + along.x * 1 * w, y: tip.y - l.y * 2.5 + along.y * 1 * w }, pen: "frame" });
+    }
+    prims.push({ kind: "text", at: { x: e.x + along.x * 4 * sign + l.x * 3, y: e.y + along.y * 4 * sign + l.y * 3 + 1.2 }, text: s.name, h: 3.5, align: "center", bold: true });
+  }
+}
+
 /** Border + title block (world coords). */
 function framePrims(sheet: SheetData, prims: Prim[]): void {
   const { w, h } = PAPER_SIZE[sheet.paper];
@@ -649,14 +705,29 @@ export function sheetGraphics(sheet: SheetData, bodies: readonly Body[], cache: 
   const snap: Entity[] = [];
   const views: SheetGraphics["views"] = [];
   framePrims(sheet, prims);
+  const placed = new Map<string, { view: SheetView; at: ViewPlacement }>();
   for (const view of sheet.views) {
-    const res = cache.get(bodies, axesOf(view));
+    const axes = axesOf(view);
+    // A section view shows the part as cut by its plane.
+    const cut = view.section === undefined ? null : cache.cut(bodies, view.section.at, axes);
+    const shown = cut === null ? bodies : cut.bodies;
+    const from = cut === null ? cache : cut.cache;
+    const res = from.get(shown, axes);
     const at = placeView(res, view);
     if (at === null) continue;
-    viewPrims(res, view, at, prims, snap, view.style === "shaded" ? cache.shaded(bodies, axesOf(view)) : null);
+    viewPrims(res, view, at, prims, snap, view.style === "shaded" ? from.shaded(shown, axes) : null);
+    if (cut !== null) {
+      for (const [a, b] of sectionHatch(cut.bodies, axes, HATCH_SPACING / view.scale)) prims.push({ kind: "line", a: at.toWorld(a), b: at.toWorld(b), pen: "thin" });
+    }
+    placed.set(view.id, { view, at });
     views.push({ id: view.id, box: at.box, scale: view.scale });
     const [bx0, , bx1, by1] = at.box;
     prims.push({ kind: "text", at: { x: (bx0 + bx1) / 2, y: by1 + 6 }, text: view.label, h: 2.5, align: "center" });
+  }
+  // Each section's cutting line, on the view it was taken from.
+  for (const { view } of placed.values()) {
+    const parent = view.parent === undefined ? undefined : placed.get(view.parent);
+    if (view.section !== undefined && parent !== undefined) cuttingLine(view, parent.view, parent.at, prims);
   }
   return { prims, snap, views };
 }

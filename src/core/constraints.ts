@@ -17,6 +17,13 @@
  * coordinates are unknowns. Every reference is treated as fixed for the
  * duration of the solve, and only one point moves per solve.
  *
+ * Constraints are LIVE: enforceConstraints() re-applies all of them, so a
+ * constrained shape keeps its place when what it is measured from moves
+ * (it is run before every redraw, and on every part rebuild). Besides
+ * distances there are simple geometric kinds -- horizontal, vertical,
+ * parallel, perpendicular, equal, coincident -- each a rule the driven
+ * entity follows from its reference.
+ *
  * Constraints are stored as plain objects in Document.constraints (the
  * same passthrough array every other part of this app already round-trips
  * opaquely) -- this module is what first gives that array real meaning.
@@ -32,6 +39,7 @@ import { Ellipse } from "../entities/ellipse";
 
 export type PointFeature = "center" | "start" | "end" | "mid";
 export type ReferenceFeature = "edge" | "center";
+export type ConstraintKind = "distance" | "horizontal" | "vertical" | "parallel" | "perpendicular" | "equal" | "coincident";
 
 /** Matches the exact field names Document.constraints already round-trips
  *  opaquely (see core/document.ts) -- snake_case here isn't a style
@@ -49,7 +57,17 @@ export interface Constraint {
    *  solid): the edge's two ends, or the centre point, as they were when the
    *  constraint was made. `ref_entity_id` is then "". */
   ref_geom?: { a: Point; b: Point } | { p: Point };
+  /** Which edge of the solid that reference geometry is (opaque here; the
+   *  part layer names it by the faces it runs between), so the constraint
+   *  follows the model: Document.modelRef resolves it. */
+  ref_model?: unknown;
+  /** Absent = "distance". */
+  kind?: ConstraintKind;
+  /** Coincident: which point of a Line reference (its centre otherwise). */
+  ref_point?: PointFeature;
 }
+
+export const kindOf = (c: Pick<Constraint, "kind">): ConstraintKind => c.kind ?? "distance";
 
 /** Max leftover distance error (world units) after solving for a set of
  *  constraints to still count as satisfied -- above this, the constraints
@@ -229,7 +247,12 @@ export function solvePoint(current: Point, refs: ConstraintRef[]): { point: Poin
 
 /** The entity a constraint measures from: one of the document's own, or a
  *  stand-in built from its stored reference geometry (see ref_geom). */
-export function referenceEntity(document: Document, constraint: Pick<Constraint, "ref_entity_id" | "ref_geom">): Drivable | null {
+export function referenceEntity(document: Document, constraint: Pick<Constraint, "ref_entity_id" | "ref_geom" | "ref_model">): Drivable | null {
+  // The solid's edge as it is now, if the part layer can still find it.
+  if (constraint.ref_model !== undefined && document.modelRef !== null) {
+    const live = document.modelRef(constraint);
+    if (live instanceof Line || live instanceof Circle || live instanceof Arc || live instanceof Ellipse) return live;
+  }
   const g = constraint.ref_geom;
   if (g !== undefined) return "p" in g ? new Circle({ ...g.p }, 1) : new Line({ ...g.a }, { ...g.b });
   const ent = entityById(document, constraint.ref_entity_id);
@@ -268,6 +291,7 @@ function closestPointOnSegment(pt: Point, p1: Point, p2: Point): Point {
  *  referencing a deleted entity -- but tolerate it rather than crash on
  *  stale/foreign data). */
 export function constraintLinePoints(document: Document, constraint: Constraint): [Point, Point] | null {
+  if (kindOf(constraint) !== "distance") return null; // geometric kinds show a glyph, not a line
   const driven = entityById(document, constraint.driven_entity_id);
   const ref = referenceEntity(document, constraint);
   if (driven === null || ref === null || !isDrivable(driven)) return null;
@@ -303,6 +327,7 @@ export function constraintAt(document: Document, worldPos: Point, tolerance: num
 /** The distance a constraint's line shows: the real one, as the geometry
  *  stands now. null if either end is gone. */
 export function constraintValue(document: Document, constraint: Constraint): number | null {
+  if (kindOf(constraint) !== "distance") return null;
   const driven = entityById(document, constraint.driven_entity_id);
   const ref = referenceEntity(document, constraint);
   if (driven === null || ref === null || !isDrivable(driven)) return null;
@@ -348,4 +373,169 @@ export function applyDrivenMove(entity: Drivable, feature: PointFeature, newPoin
     const old = entity.midpoint();
     entity.move(newPoint.x - old.x, newPoint.y - old.y);
   }
+}
+
+// --- Live enforcement & the geometric kinds ---
+
+function lineDir(l: Line): Point {
+  const dx = l.endPoint.x - l.startPoint.x;
+  const dy = l.endPoint.y - l.startPoint.y;
+  const len = Math.hypot(dx, dy) || 1;
+  return { x: dx / len, y: dy / len };
+}
+
+/** Turns `line` about its middle to lie along `dir` (whichever way round is
+ *  the smaller turn), keeping its length. Returns how far its ends moved. */
+function alignLine(line: Line, dir: Point): number {
+  const cur = lineDir(line);
+  const d = cur.x * dir.x + cur.y * dir.y >= 0 ? dir : { x: -dir.x, y: -dir.y };
+  const half = dist(line.startPoint, line.endPoint) / 2;
+  const m = line.midpoint();
+  const a = { x: m.x - d.x * half, y: m.y - d.y * half };
+  const b = { x: m.x + d.x * half, y: m.y + d.y * half };
+  const moved = Math.max(dist(a, line.startPoint), dist(b, line.endPoint));
+  line.startPoint = a;
+  line.endPoint = b;
+  return moved;
+}
+
+/** Sets a line's length about its middle; returns how far its ends moved. */
+function resizeLine(line: Line, length: number): number {
+  const d = lineDir(line);
+  const m = line.midpoint();
+  const a = { x: m.x - (d.x * length) / 2, y: m.y - (d.y * length) / 2 };
+  const moved = dist(a, line.startPoint);
+  line.startPoint = a;
+  line.endPoint = { x: m.x + (d.x * length) / 2, y: m.y + (d.y * length) / 2 };
+  return moved;
+}
+
+/** The point a coincident constraint pins to, on its reference. */
+function coincidentTarget(ref: Drivable, constraint: Constraint): Point {
+  if (!(ref instanceof Line)) return featurePoint(ref, "center");
+  // A point of the solid: whichever end / middle is nearest where it was picked.
+  const g = constraint.ref_geom;
+  if (constraint.ref_model !== undefined && g !== undefined && "p" in g) {
+    const candidates = [ref.startPoint, ref.endPoint, ref.midpoint()];
+    return { ...candidates.reduce((best, p) => (dist(p, g.p) < dist(best, g.p) ? p : best)) };
+  }
+  return featurePoint(ref, constraint.ref_point ?? "mid");
+}
+
+/** A coincident constraint's stand-in reference when its point is plain
+ *  reference geometry (ref_geom {p} with no line behind it). */
+function referenceFor(document: Document, constraint: Constraint): Drivable | null {
+  return referenceEntity(document, constraint);
+}
+
+/** Applies one geometric constraint; returns how far it moved things, or
+ *  null if it can't apply (wrong entity kinds, something deleted). */
+function applyGeometric(document: Document, c: Constraint): number | null {
+  const driven = entityById(document, c.driven_entity_id);
+  if (driven === null || !isDrivable(driven)) return null;
+  const kind = kindOf(c);
+  if (kind === "horizontal" || kind === "vertical") {
+    return driven instanceof Line ? alignLine(driven, kind === "horizontal" ? { x: 1, y: 0 } : { x: 0, y: 1 }) : null;
+  }
+  const ref = referenceFor(document, c);
+  if (ref === null) return null;
+  if (kind === "parallel" || kind === "perpendicular") {
+    if (!(driven instanceof Line) || !(ref instanceof Line)) return null;
+    const d = lineDir(ref);
+    return alignLine(driven, kind === "parallel" ? d : { x: -d.y, y: d.x });
+  }
+  if (kind === "equal") {
+    if (driven instanceof Line && ref instanceof Line) return resizeLine(driven, dist(ref.startPoint, ref.endPoint));
+    if ((driven instanceof Circle || driven instanceof Arc) && (ref instanceof Circle || ref instanceof Arc)) {
+      const moved = Math.abs(driven.radius - ref.radius);
+      driven.radius = ref.radius;
+      return moved;
+    }
+    return null;
+  }
+  if (kind === "coincident") {
+    const target = coincidentTarget(ref, c);
+    const moved = dist(featurePoint(driven, c.driven_feature), target);
+    if (moved > 0) applyDrivenMove(driven, c.driven_feature, target);
+    return moved;
+  }
+  return null;
+}
+
+/** How far a constraint is from holding right now (world units; 0 = it
+ *  holds), or null if it can't be evaluated. */
+export function constraintError(document: Document, c: Constraint): number | null {
+  const driven = entityById(document, c.driven_entity_id);
+  if (driven === null || !isDrivable(driven)) return null;
+  const kind = kindOf(c);
+  if (kind === "horizontal" || kind === "vertical") {
+    if (!(driven instanceof Line)) return null;
+    const d = lineDir(driven);
+    return Math.abs(kind === "horizontal" ? d.y : d.x) * dist(driven.startPoint, driven.endPoint);
+  }
+  const ref = referenceEntity(document, c);
+  if (ref === null) return null;
+  if (kind === "distance") return Math.abs(rawDistanceAndGradient(ref, c.ref_feature, featurePoint(driven, c.driven_feature)).distance - c.target);
+  if (kind === "parallel" || kind === "perpendicular") {
+    if (!(driven instanceof Line) || !(ref instanceof Line)) return null;
+    const a = lineDir(driven);
+    const b = lineDir(ref);
+    const off = kind === "parallel" ? a.x * b.y - a.y * b.x : a.x * b.x + a.y * b.y;
+    return Math.abs(off) * dist(driven.startPoint, driven.endPoint);
+  }
+  if (kind === "equal") {
+    if (driven instanceof Line && ref instanceof Line) return Math.abs(dist(driven.startPoint, driven.endPoint) - dist(ref.startPoint, ref.endPoint));
+    if ((driven instanceof Circle || driven instanceof Arc) && (ref instanceof Circle || ref instanceof Arc)) return Math.abs(driven.radius - ref.radius);
+    return null;
+  }
+  return dist(featurePoint(driven, c.driven_feature), coincidentTarget(ref, c));
+}
+
+/**
+ * Makes every constraint hold again, moving each driven entity as its
+ * constraints require. Run after anything may have moved (every redraw;
+ * every part rebuild). Constraints are applied in turn and the whole set
+ * repeated until nothing moves, so a shape measured from another
+ * constrained shape settles too. Returns true if anything was moved.
+ */
+export function enforceConstraints(document: Document): boolean {
+  const all = document.constraints as Constraint[];
+  if (all.length === 0) return false;
+  const EPS = 1e-9;
+  let any = false;
+  for (let pass = 0; pass < 8; pass++) {
+    let moved = false;
+    // Shape rules first (they turn / resize the entity about its middle)...
+    for (const c of all) {
+      if (kindOf(c) === "distance") continue;
+      const d = applyGeometric(document, c);
+      if (d !== null && d > EPS) moved = true;
+    }
+    // ...then where it sits: all of an entity point's distances solved together.
+    const seen = new Set<string>();
+    for (const c of all) {
+      if (kindOf(c) !== "distance") continue;
+      const key = `${c.driven_entity_id}|${c.driven_feature}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const driven = entityById(document, c.driven_entity_id);
+      if (driven === null || !isDrivable(driven)) continue;
+      const refs: ConstraintRef[] = [];
+      for (const k of all) {
+        if (kindOf(k) !== "distance" || k.driven_entity_id !== c.driven_entity_id || k.driven_feature !== c.driven_feature) continue;
+        const ent = referenceEntity(document, k);
+        if (ent !== null) refs.push({ refEntity: ent, refFeature: k.ref_feature, target: k.target });
+      }
+      const at = featurePoint(driven, c.driven_feature);
+      const { point, residual } = solvePoint(at, refs);
+      if (point === null || residual > RESIDUAL_TOLERANCE) continue; // can't all hold: leave it where it is
+      if (dist(point, at) > EPS) {
+        applyDrivenMove(driven, c.driven_feature, point);
+        moved = true;
+      }
+    }
+    if (!moved) break;
+    any = true;
+  }
+  return any;
 }

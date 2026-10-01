@@ -39,6 +39,7 @@ import { EditTextCommand } from "./editText";
 import { SaveLibCommand } from "./saveLib";
 import { InsertLibCommand } from "./insertLib";
 import { ConstrainDistanceCommand } from "./constrainDistance";
+import { ConstrainGeometryCommand } from "./constrainGeometry";
 import { ExportPdfCommand } from "./exportPdf";
 import { DimDecimalsCommand } from "./dimDecimals";
 
@@ -76,6 +77,12 @@ export const COMMAND_REGISTRY: Record<string, RegistryEntry> = {
   insertlib: { factory: (engine) => new InsertLibCommand(engine), aliases: ["il", "insert"] },
   savelib: { factory: (engine) => new SaveLibCommand(engine), aliases: ["sl"] },
   constrain: { factory: (engine) => new ConstrainDistanceCommand(engine), aliases: ["con", "cdist"] },
+  horizontal: { factory: (engine) => new ConstrainGeometryCommand(engine, "horizontal"), aliases: ["hor"] },
+  vertical: { factory: (engine) => new ConstrainGeometryCommand(engine, "vertical"), aliases: ["ver"] },
+  parallel: { factory: (engine) => new ConstrainGeometryCommand(engine, "parallel"), aliases: ["par"] },
+  perpendicular: { factory: (engine) => new ConstrainGeometryCommand(engine, "perpendicular"), aliases: ["perp"] },
+  equal: { factory: (engine) => new ConstrainGeometryCommand(engine, "equal"), aliases: ["eq"] },
+  coincident: { factory: (engine) => new ConstrainGeometryCommand(engine, "coincident"), aliases: ["coi"] },
   pdfexport: { factory: (engine) => new ExportPdfCommand(engine), aliases: ["pdf"] },
   // Contextual-only: entered directly via canvasView's grip hit-test, never typed.
   movegrip: { factory: (engine) => new MoveGripCommand(engine), aliases: [] },

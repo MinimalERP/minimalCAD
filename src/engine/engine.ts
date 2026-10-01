@@ -54,6 +54,11 @@ export class Engine {
   backdrop: ((ctx: CanvasRenderingContext2D) => void) | null = null;
   underlayHidden = false;
 
+  /** A part sketch: what to remember about an underlay entity so a
+   *  constraint against it follows the solid (part/sketchRefs.ts's
+   *  ModelEdgeRef, opaque here). Null outside a part sketch. */
+  modelRefOf: ((entity: Entity) => unknown) | null = null;
+
   /** Whose own sizes (core/sizeLabels.ts) are shown on the canvas: only the
    *  selected / just-drawn entities (2D drafting -- a big drawing stays
    *  clean), or every entity (a part sketch, which is small). */

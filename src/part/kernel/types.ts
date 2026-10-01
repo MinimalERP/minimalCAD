@@ -44,6 +44,12 @@ export interface Face {
   aliases?: TopoRef[];
 }
 
+/** A hole may be drilled on a work plane instead of a face: its "face" is
+ *  then this stand-in ref, naming the plane. */
+export const PLANE_REF_INDEX = "§plane";
+export const planeRef = (planeId: string): TopoRef => ({ feature: planeId, role: "side", index: PLANE_REF_INDEX });
+export const isPlaneRef = (ref: TopoRef): boolean => ref.index === PLANE_REF_INDEX;
+
 export function sameRef(a: TopoRef, b: TopoRef): boolean {
   return a.feature === b.feature && a.role === b.role && a.index === b.index;
 }
