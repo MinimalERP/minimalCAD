@@ -30,7 +30,8 @@ import {
   referenceFeatureFor,
   rawDistanceAndGradient,
   solvePoint,
-  entityById,
+  referenceEntity,
+  referenceGeometry,
   applyDrivenMove,
   featurePoint,
   RESIDUAL_TOLERANCE,
@@ -46,6 +47,9 @@ export class ConstrainDistanceCommand extends BaseCommand {
   private drivenFeature: PointFeature | null = null;
   private refEntity: Drivable | null = null;
   private refFeature: ReferenceFeature | null = null;
+  /** The reference is reference geometry (a projected edge of the solid
+   *  behind a part sketch), not an entity of the document. */
+  private refIsUnderlay = false;
 
   constructor(engine: Engine) {
     super(engine);
@@ -69,6 +73,17 @@ export class ConstrainDistanceCommand extends BaseCommand {
     return null;
   }
 
+  /** A reference may also be the reference geometry behind a part sketch. */
+  private pickReference(worldPos: Point): { entity: Drivable; underlay: boolean } | null {
+    const own = this.pickEntity(worldPos);
+    if (own !== null) return { entity: own, underlay: false };
+    const tolerance = this.engine.pickTolerance();
+    for (const entity of this.engine.underlay ?? []) {
+      if (isDrivable(entity) && entity.hitTest(worldPos, tolerance)) return { entity, underlay: true };
+    }
+    return null;
+  }
+
   leftClick(worldPos: Point): void {
     if (this.state === 0) {
       const entity = this.pickEntity(worldPos);
@@ -81,10 +96,11 @@ export class ConstrainDistanceCommand extends BaseCommand {
       this.drivenEntity = entity;
       this.drivenFeature = feature;
       this.state = 1;
-      this.commandBar.setStatus("CONSTRAIN", "Pick a reference entity (side/point) to measure from");
+      this.commandBar.setStatus("CONSTRAIN", "Pick a reference to measure from - a line / circle, or an edge of the solid behind the sketch");
     } else if (this.state === 1) {
-      const entity = this.pickEntity(worldPos);
-      if (entity === null) return;
+      const picked = this.pickReference(worldPos);
+      if (picked === null) return;
+      const entity = picked.entity;
       if (entity === this.drivenEntity) {
         this.commandBar.setStatus("CONSTRAIN", "Reference must be a different entity");
         return;
@@ -96,6 +112,7 @@ export class ConstrainDistanceCommand extends BaseCommand {
       }
       this.refEntity = entity;
       this.refFeature = feature;
+      this.refIsUnderlay = picked.underlay;
       this.state = 2;
       this.commandBar.setStatus("CONSTRAIN", "Enter distance");
       this.commandBar.enableInput();
@@ -130,17 +147,13 @@ export class ConstrainDistanceCommand extends BaseCommand {
     const existing = (this.document.constraints as Constraint[]).filter(
       (c) => c.driven_entity_id === drivenEntity.id,
     );
-    const trial: { ref_entity_id: string; ref_feature: ReferenceFeature; target: number }[] = [
-      ...existing,
-      { ref_entity_id: refEntity.id, ref_feature: refFeature, target },
-    ];
-
     const refs: ConstraintRef[] = [];
-    for (const c of trial) {
-      const ent = entityById(this.document, c.ref_entity_id);
-      if (ent === null || !isDrivable(ent)) continue; // stale constraint pointing at a since-deleted entity
+    for (const c of existing) {
+      const ent = referenceEntity(this.document, c);
+      if (ent === null) continue; // stale constraint pointing at a since-deleted entity
       refs.push({ refEntity: ent, refFeature: c.ref_feature, target: c.target });
     }
+    refs.push({ refEntity, refFeature, target });
 
     const { point: solved, residual } = solvePoint(currentPoint, refs);
     if (solved === null || residual > RESIDUAL_TOLERANCE) {
@@ -161,9 +174,10 @@ export class ConstrainDistanceCommand extends BaseCommand {
       id: generateId(),
       driven_entity_id: drivenEntity.id,
       driven_feature: drivenFeature,
-      ref_entity_id: refEntity.id,
+      ref_entity_id: this.refIsUnderlay ? "" : refEntity.id,
       ref_feature: refFeature,
       target,
+      ...(this.refIsUnderlay ? { ref_geom: referenceGeometry(refEntity) } : {}),
     });
 
     this.refEntity = null;

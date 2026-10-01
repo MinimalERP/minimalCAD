@@ -1049,6 +1049,21 @@ body[data-workspace="drawing"] #gl-canvas[hidden] ~ .feature-dialog {
   background: rgba(232, 176, 74, 0.15);
   color: #e8b04a;
 }
+/* The text box that opens on a clicked size / constraint value (2D canvas). */
+.value-editor {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  z-index: 60;
+  width: 72px;
+  padding: 2px 4px;
+  font: 12px Consolas, Menlo, monospace;
+  text-align: center;
+  color: #fff;
+  background: #101418;
+  border: 1px solid #5aa0ff;
+  border-radius: 3px;
+  outline: none;
+}
 .feature-dialog .fd-selection.clickable {
   cursor: pointer;
 }

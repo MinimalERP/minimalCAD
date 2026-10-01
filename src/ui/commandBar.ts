@@ -514,7 +514,10 @@ export class CommandBar extends EventTarget {
 
   private submit(): void {
     if (this.dualMode) {
-      const combined = `${this.inputField.value.trim()}<${this.angleField.value.trim()}`;
+      // A full point typed in the distance field ("40,25" or "50<30") is
+      // already complete: the angle field must not be tacked onto it.
+      const typed = this.inputField.value.trim();
+      const combined = typed.includes(",") || typed.includes("<") ? typed : `${typed}<${this.angleField.value.trim()}`;
       this.dispatchEvent(new CustomEvent("inputSubmitted", { detail: combined }));
       this.clear();
       this.angleField.value = "";

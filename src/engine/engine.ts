@@ -54,6 +54,11 @@ export class Engine {
   backdrop: ((ctx: CanvasRenderingContext2D) => void) | null = null;
   underlayHidden = false;
 
+  /** Whose own sizes (core/sizeLabels.ts) are shown on the canvas: only the
+   *  selected / just-drawn entities (2D drafting -- a big drawing stays
+   *  clean), or every entity (a part sketch, which is small). */
+  sizeLabelMode: "active" | "all" = "active";
+
   /** Dimension decimals for new dimensions (DIMDEC): 0-4, or null = the
    *  classic 2 decimals ("auto" trims zeros: 25, 12.5). */
   dimPrecision: number | "auto" | null = null;

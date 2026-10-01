@@ -39,7 +39,9 @@ import type { Engine } from "../engine/engine";
 import type { GripCommand } from "../commands/types";
 import { Text } from "../entities/text";
 import { Dimension } from "../entities/dimension";
-import { constraintAt, constraintLinePoints } from "../core/constraints";
+import { constraintAt, constraintLinePoints, constraintValue, setConstraintDistance } from "../core/constraints";
+import { applySize, formatSize, sizeLabelsOf } from "../core/sizeLabels";
+import { evalNumber } from "../input/dynamicInput";
 import type { Constraint } from "../core/constraints";
 import { copySelection, pasteClipboard } from "../engine/clipboard";
 
@@ -52,6 +54,11 @@ const COLOR_SNAP_MARKER = "#ffff00";
 const SNAP_MARKER_SCREEN_SIZE = 9.0;
 const COLOR_CONSTRAINT = "#c586c0";
 const COLOR_CONSTRAINT_ACTIVE = "#ff69ff";
+const COLOR_SIZE_LABEL = "#7fd0e8";
+/** How far (screen px) a size label sits off its geometry. */
+const SIZE_LABEL_OFFSET = 14;
+/** A 2D drawing with up to this many entities shows every shape's sizes. */
+const SIZE_LABELS_ALWAYS_UP_TO = 300;
 
 // Screen-pixel movement a pending single-touch point must exceed before it
 // commits to a drag/select (rather than staying eligible to become a tap on
@@ -117,6 +124,13 @@ export class CanvasView {
   // Direct click-and-drag body relocation (armed by a plain, non-Shift click
   // that hits an entity body, resolved on move/release).
   private dragEntities: Entity[] | null = null;
+  /** Value labels drawn in the last frame (entity sizes, constraint
+   *  distances) as screen boxes: a double-click inside one edits it. */
+  private valueLabels: { x: number; y: number; w: number; h: number; group: unknown; edit: () => void }[] = [];
+  /** Entities drawn since the last idle click: their sizes show at once,
+   *  without having to select them. */
+  private freshIds = new Set<Entity>();
+  private seenEntities: { doc: unknown; count: number } = { doc: null, count: 0 };
   private dragLastPos: Point | null = null;
   private dragMoved = false;
 
@@ -402,6 +416,20 @@ export class CanvasView {
    */
   private onDoubleClick(e: MouseEvent): void {
     if (e.button !== 0) return;
+    // A value shown on the drawing (an entity's size, a constraint's
+    // distance): edit it, even from inside a drawing command -- the first
+    // click of the pair may have started one.
+    const s = this.eventToScreenPoint(e);
+    const label = this.valueLabels.find((l) => s.x >= l.x && s.x <= l.x + l.w && s.y >= l.y && s.y <= l.y + l.h);
+    if (label !== undefined) {
+      if (this.engine.commandManager.currentCommand !== null) this.engine.cancelCommand();
+      this.dragEntities = null;
+      this.dragLastPos = null;
+      this.dragMoved = false;
+      label.edit();
+      this.requestRedraw();
+      return;
+    }
     if (this.engine.commandManager.currentCommand !== null) return; // don't interrupt an already-active command/gesture
 
     const worldPos = this.viewport.screenToWorld(this.eventToScreenPoint(e));
@@ -443,6 +471,15 @@ export class CanvasView {
     }
 
     if (button !== 0) return; // no command active: only the primary button/touch drives selection/grips
+    // A click on a value label edits it right there -- and must not
+    // deselect or hide the very number being clicked.
+    const sp = this.viewport.worldToScreen(worldPos);
+    const clicked = this.valueLabels.find((l) => sp.x >= l.x && sp.x <= l.x + l.w && sp.y >= l.y && sp.y <= l.y + l.h);
+    if (clicked !== undefined) {
+      clicked.edit();
+      return;
+    }
+    this.freshIds.clear(); // moved on: only the selection shows its sizes now
 
     const tolerance = this.engine.pickTolerance();
     const gripHit = gripAt(this.engine.selection, worldPos, tolerance);
@@ -1004,6 +1041,7 @@ export class CanvasView {
     if (!this.engine.underlayHidden) this.drawUnderlay();
     this.drawEntities();
     this.drawConstraints();
+    this.drawValueLabels();
     this.drawSelectionHighlights();
     this.drawSelectionBox();
     this.engine.commandManager.draw(this.ctx);
@@ -1186,6 +1224,165 @@ export class CanvasView {
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** Marks entities added since the last frame as "fresh" (their sizes show
+   *  until the next idle click). A big jump -- a file opened, a paste -- is
+   *  not someone drawing: nothing is marked. */
+  private valueEditor: { close(): void } | null = null;
+
+  /**
+   * A small text box right on the clicked value (an entity's size, a
+   * constraint's distance): type the new value there, Enter applies, Esc or
+   * clicking away leaves it as it was. `apply` makes the change (pushing
+   * its own undo snapshot) or returns why the value can't be used.
+   */
+  private openValueEditor(
+    index: number,
+    group: unknown,
+    box: { x: number; y: number; w: number; h: number },
+    title: string,
+    current: string,
+    apply: (value: number) => string | null,
+  ): void {
+    this.valueEditor?.close();
+    const rect = this.canvas.getBoundingClientRect();
+    const input = document.createElement("input");
+    input.className = "value-editor";
+    input.value = current;
+    input.spellcheck = false;
+    input.style.left = `${rect.left + box.x + box.w / 2}px`;
+    input.style.top = `${rect.top + box.y + box.h / 2}px`;
+    document.body.appendChild(input);
+    const bar = this.engine.commandBar;
+    bar.setStatus(title, "Type the new value, Enter to apply - Tab for the next value (Esc to cancel)");
+    let open = true;
+    const close = (): void => {
+      if (!open) return;
+      open = false;
+      this.valueEditor = null;
+      input.remove();
+      bar.setReady();
+      this.canvas.focus();
+      this.requestRedraw();
+    };
+    this.valueEditor = { close };
+    input.addEventListener("pointerdown", (e) => e.stopPropagation());
+    /** Applies what is typed (nothing to do if it wasn't changed). False = it can't be used. */
+    const commit = (): boolean => {
+      if (input.value.trim() === current) return true;
+      const value = evalNumber(input.value);
+      if (value === null || value <= 0) {
+        bar.setStatus(title, "Invalid - enter a positive number");
+        return false;
+      }
+      const error = apply(value);
+      if (error !== null) bar.setStatus(title, error);
+      return error === null;
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation(); // typing here must not reach the canvas / command line
+      if (e.key === "Escape") close();
+      else if (e.key === "Enter") {
+        if (commit()) close();
+      } else if (e.key === "Tab") {
+        // On to the next value OF THE SAME SHAPE -- its sizes, then its
+        // constraints (Shift+Tab: the one before) -- applying this one.
+        e.preventDefault();
+        if (!commit()) return;
+        close();
+        this.render(); // the labels as they are after the change
+        const own = this.valueLabels.map((label, i) => ({ label, i })).filter((x) => x.label.group === group);
+        const at = own.findIndex((x) => x.i === index);
+        if (own.length > 0) own[(Math.max(at, 0) + (e.shiftKey ? own.length - 1 : 1)) % own.length]!.label.edit();
+      }
+    });
+    // Once the click that opened it has finished: that same mouse press
+    // still goes on to focus the canvas, which would close the box at once.
+    setTimeout(() => {
+      if (!open) return;
+      input.focus();
+      input.select();
+      input.addEventListener("blur", close);
+    }, 0);
+  }
+
+  private trackFreshEntities(): void {
+    const doc = this.engine.document;
+    const entities = doc.getEntities();
+    const seen = this.seenEntities;
+    if (seen.doc !== doc) this.freshIds.clear();
+    else if (entities.length > seen.count && entities.length - seen.count <= 4) {
+      for (const e of entities.slice(seen.count)) this.freshIds.add(e);
+    }
+    this.seenEntities = { doc, count: entities.length };
+  }
+
+  /**
+   * The numbers shown on the drawing: each entity's own sizes (line length,
+   * circle diameter, rectangle width / height -- core/sizeLabels.ts) and
+   * every distance constraint's value. Click one to type a new value right
+   * there (openValueEditor). Screen overlay only: never printed or exported.
+   */
+  private drawValueLabels(): void {
+    this.valueLabels = [];
+    this.trackFreshEntities();
+    const engine = this.engine;
+    if (engine.backdrop !== null) return; // a drawing sheet has real dimensions instead
+    const doc = engine.document;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.font = "11px Consolas, Menlo, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const put = (group: unknown, text: string, at: Point, color: string, title: string, value: number, apply: (v: number) => string | null): void => {
+      const w = ctx.measureText(text).width + 8;
+      const h = 15;
+      const box = { x: at.x - w / 2, y: at.y - h / 2, w, h };
+      ctx.fillStyle = "rgba(24, 24, 24, 0.8)";
+      ctx.fillRect(box.x, box.y, w, h);
+      ctx.fillStyle = color;
+      ctx.fillText(text, at.x, at.y + 0.5);
+      const index = this.valueLabels.length;
+      this.valueLabels.push({ ...box, group, edit: () => this.openValueEditor(index, group, box, title, formatSize(value), apply) });
+    };
+
+    // Always on, unless the drawing is big (an imported layout would drown
+    // in numbers): then only the selected / just-drawn shapes show theirs.
+    const entities = doc.getEntities();
+    const all = engine.sizeLabelMode === "all" || entities.length <= SIZE_LABELS_ALWAYS_UP_TO;
+    for (const entity of entities) {
+      if (!all && !engine.selection.isSelected(entity) && !this.freshIds.has(entity)) continue;
+      for (const label of sizeLabelsOf(entity)) {
+        const a = this.viewport.worldToScreen(label.anchor);
+        const text = `${label.prefix}${formatSize(label.value)}`;
+        put(entity, text, { x: a.x + label.away.x * SIZE_LABEL_OFFSET, y: a.y + label.away.y * SIZE_LABEL_OFFSET }, COLOR_SIZE_LABEL, label.name.toUpperCase(), label.value, (value) => {
+          const before = doc.toDict();
+          if (!applySize(entity, label.key, value)) return "That size can't be set on this shape any more";
+          engine.undo.push(before);
+          return null;
+        });
+      }
+    }
+
+    for (const constraint of doc.constraints as Constraint[]) {
+      const pts = constraintLinePoints(doc, constraint);
+      const value = constraintValue(doc, constraint);
+      if (pts === null || value === null) continue;
+      const a = this.viewport.worldToScreen(pts[0]);
+      const b = this.viewport.worldToScreen(pts[1]);
+      const active = constraint.id === engine.activeConstraintId;
+      // Grouped with the shape it positions, so Tab runs through that shape's values.
+      const driven = entities.find((e) => e.id === constraint.driven_entity_id);
+      put(driven, formatSize(value), { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, active ? COLOR_CONSTRAINT_ACTIVE : COLOR_CONSTRAINT, "DISTANCE", value, (v) => {
+        const before = doc.toDict();
+        const error = setConstraintDistance(doc, constraint.id, v);
+        if (error === null) engine.undo.push(before);
+        return error;
+      });
     }
     ctx.restore();
   }

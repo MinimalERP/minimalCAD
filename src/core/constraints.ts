@@ -44,6 +44,11 @@ export interface Constraint {
   ref_entity_id: string;
   ref_feature: ReferenceFeature;
   target: number;
+  /** Set when the reference is not an entity of this document but
+   *  reference geometry shown behind a part sketch (a projected edge of the
+   *  solid): the edge's two ends, or the centre point, as they were when the
+   *  constraint was made. `ref_entity_id` is then "". */
+  ref_geom?: { a: Point; b: Point } | { p: Point };
 }
 
 /** Max leftover distance error (world units) after solving for a set of
@@ -222,6 +227,20 @@ export function solvePoint(current: Point, refs: ConstraintRef[]): { point: Poin
   return { point: p, residual };
 }
 
+/** The entity a constraint measures from: one of the document's own, or a
+ *  stand-in built from its stored reference geometry (see ref_geom). */
+export function referenceEntity(document: Document, constraint: Pick<Constraint, "ref_entity_id" | "ref_geom">): Drivable | null {
+  const g = constraint.ref_geom;
+  if (g !== undefined) return "p" in g ? new Circle({ ...g.p }, 1) : new Line({ ...g.a }, { ...g.b });
+  const ent = entityById(document, constraint.ref_entity_id);
+  return ent !== null && isDrivable(ent) ? ent : null;
+}
+
+/** ref_geom for reference geometry `entity` (not one of the document's). */
+export function referenceGeometry(entity: Drivable): NonNullable<Constraint["ref_geom"]> {
+  return entity instanceof Line ? { a: { ...entity.startPoint }, b: { ...entity.endPoint } } : { p: { ...entity.center } };
+}
+
 export function entityById(document: Document, entityId: string): Entity | null {
   for (const entity of document.getEntities()) {
     if (entity.id === entityId) return entity;
@@ -250,8 +269,8 @@ function closestPointOnSegment(pt: Point, p1: Point, p2: Point): Point {
  *  stale/foreign data). */
 export function constraintLinePoints(document: Document, constraint: Constraint): [Point, Point] | null {
   const driven = entityById(document, constraint.driven_entity_id);
-  const ref = entityById(document, constraint.ref_entity_id);
-  if (driven === null || ref === null || !isDrivable(driven) || !isDrivable(ref)) return null;
+  const ref = referenceEntity(document, constraint);
+  if (driven === null || ref === null || !isDrivable(driven)) return null;
 
   const drivenPt = featurePoint(driven, constraint.driven_feature);
   const refPt =
@@ -279,6 +298,40 @@ export function constraintAt(document: Document, worldPos: Point, tolerance: num
     }
   }
   return best;
+}
+
+/** The distance a constraint's line shows: the real one, as the geometry
+ *  stands now. null if either end is gone. */
+export function constraintValue(document: Document, constraint: Constraint): number | null {
+  const driven = entityById(document, constraint.driven_entity_id);
+  const ref = referenceEntity(document, constraint);
+  if (driven === null || ref === null || !isDrivable(driven)) return null;
+  return Math.abs(rawDistanceAndGradient(ref, constraint.ref_feature, featurePoint(driven, constraint.driven_feature)).distance);
+}
+
+/**
+ * Changes one constraint's distance and moves its entity to suit, solving
+ * together with the entity's other constraints (so a second one still
+ * holds). Returns null when done, or why it can't be.
+ */
+export function setConstraintDistance(document: Document, id: string, magnitude: number): string | null {
+  const all = document.constraints as Constraint[];
+  const c = all.find((x) => x.id === id);
+  const driven = c === undefined ? null : entityById(document, c.driven_entity_id);
+  if (c === undefined || driven === null || !isDrivable(driven)) return "That constraint's entity is gone";
+  // Same side of a reference edge as before.
+  const target = c.ref_feature === "edge" && c.target < 0 ? -magnitude : magnitude;
+  const refs: ConstraintRef[] = [];
+  for (const k of all) {
+    if (k.driven_entity_id !== c.driven_entity_id) continue;
+    const ent = referenceEntity(document, k);
+    if (ent !== null) refs.push({ refEntity: ent, refFeature: k.ref_feature, target: k === c ? target : k.target });
+  }
+  const { point, residual } = solvePoint(featurePoint(driven, c.driven_feature), refs);
+  if (point === null || residual > RESIDUAL_TOLERANCE) return "Conflicts with another constraint on this entity";
+  applyDrivenMove(driven, c.driven_feature, point);
+  c.target = target;
+  return null;
 }
 
 /** Relocates `entity` so its `feature` point lands at `newPoint`. */

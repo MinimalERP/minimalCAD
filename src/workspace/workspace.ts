@@ -175,6 +175,7 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
       engine.underlay = reference.underlay;
       engine.ucsLabels = reference.labels;
     }
+    engine.sizeLabelMode = "all";
     session.sketch = { sketchId, engine, viewport, plane: sketchPlane };
     session.workspace = "sketch";
     this.apply(session);
