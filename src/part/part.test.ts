@@ -108,6 +108,20 @@ describe("findProfiles", () => {
     expect(openChains).toBe(1);
   });
 
+  it("a centreline drawn from a corner doesn't open the shape up", () => {
+    const { regions } = findProfiles([...rectLines(100, 50), new Line({ x: 0, y: 0 }, { x: -30, y: 0 }), new Line({ x: -30, y: 0 }, { x: -30, y: 20 })]);
+    expect(regions).toHaveLength(1);
+    expect(regions[0]!.area).toBeCloseTo(5000);
+    expect(regions[0]!.outer.segments).toHaveLength(4);
+  });
+
+  it("a line drawn over a side, or of no length, doesn't open the shape up", () => {
+    const { regions } = findProfiles([...rectLines(100, 50), new Line({ x: 100, y: 0 }, { x: 0, y: 0 }), new Line({ x: 100, y: 50 }, { x: 100, y: 50 })]);
+    expect(regions).toHaveLength(1);
+    expect(regions[0]!.area).toBeCloseTo(5000);
+    expect(regions[0]!.outer.segments).toHaveLength(4);
+  });
+
   it("chains lines and an arc into a slot-like loop", () => {
     // D-shape: line along the bottom, semicircle over the top (Y-down world, so "top" is y<0).
     const arc = new Arc({ x: 10, y: 0 }, 10, Math.PI, 2 * Math.PI);

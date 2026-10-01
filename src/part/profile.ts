@@ -12,8 +12,10 @@
  * tests, the analytic segments feed exact 3D edges (and, later, drawings).
  *
  * Scope (Milestone 1): loops are found as connected components whose every
- * endpoint joins exactly two segments. Branching or open chains are ignored
- * (reported via `openChains`), and loops are assumed not to cross each other.
+ * endpoint joins exactly two segments, once loose tails (a centreline drawn
+ * from a corner) and lines lying on another are set aside. Other branching
+ * or open chains are ignored (reported via `openChains`), and loops are
+ * assumed not to cross each other.
  */
 
 import type { Point } from "../core/types";
@@ -183,8 +185,33 @@ function chain(open: Segment[], tol: number): { loops: Segment[][]; openChains: 
         }
       }
     }
-    const nodesInComponent = new Set(component.flatMap((i) => [...ends[i]!]));
-    const isCycle = [...nodesInComponent].every((n) => incident[n]!.length === 2);
+    // What doesn't bound anything is set aside, so a centreline drawn from a
+    // corner of the shape (or over one of its sides) doesn't open it up:
+    // lines of no length, a line lying on another, and loose tails.
+    const live = new Set<number>();
+    const pairs = new Set<string>();
+    for (const i of component) {
+      const [a, b] = ends[i]!;
+      if (open[i]!.kind === "line") {
+        const pair = a < b ? `${a},${b}` : `${b},${a}`;
+        if (a === b || pairs.has(pair)) continue;
+        pairs.add(pair);
+      }
+      live.add(i);
+    }
+    const liveAt = (node: number): number[] => incident[node]!.filter((j) => live.has(j));
+    for (let pruned = true; pruned; ) {
+      pruned = false;
+      for (const i of live) {
+        const [a, b] = ends[i]!;
+        if (a !== b && (liveAt(a).length === 1 || liveAt(b).length === 1)) {
+          live.delete(i);
+          pruned = true;
+        }
+      }
+    }
+    const nodesInComponent = new Set([...live].flatMap((i) => [...ends[i]!]));
+    const isCycle = live.size > 0 && [...nodesInComponent].every((n) => liveAt(n).length === 2);
     if (!isCycle) {
       openChains++;
       continue;
@@ -192,16 +219,17 @@ function chain(open: Segment[], tol: number): { loops: Segment[][]; openChains: 
     // Walk the cycle, orienting each segment to continue from the last end.
     const loop: Segment[] = [];
     const used = new Set<number>();
-    let segIdx = start;
-    let atNode = ends[start]![0];
+    const first = live.values().next().value!;
+    let segIdx = first;
+    let atNode = ends[first]![0];
     while (!used.has(segIdx)) {
       used.add(segIdx);
       const [a, b] = ends[segIdx]!;
       const forward = a === atNode;
       loop.push(forward ? open[segIdx]! : reverseSeg(open[segIdx]!));
       atNode = forward ? b : a;
-      const next = incident[atNode]!.find((j) => j !== segIdx) ?? segIdx;
-      if (next === segIdx && incident[atNode]!.length === 2) break; // two segs between the same 2 nodes
+      const next = liveAt(atNode).find((j) => j !== segIdx) ?? segIdx;
+      if (next === segIdx && liveAt(atNode).length === 2) break; // two segs between the same 2 nodes
       segIdx = next;
     }
     loops.push(loop);
