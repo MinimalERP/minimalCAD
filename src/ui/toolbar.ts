@@ -91,7 +91,7 @@ const COMMAND_GROUPS: readonly (readonly string[])[] = [
  *  drafting-only. */
 const SKETCH_GROUPS: readonly (readonly string[])[] = [
   ["line", "arc", "rectangle", "circle", "ellipse"],
-  ["trim", "offset", "mirror", "fillet", "chamfer", "move", "copy", "rotate", "join", "explode"],
+  ["trim", "offset", "mirror", "fillet", "chamfer", "move", "copy", "rotate", "join", "explode", "constrain"],
   ["linear", "aligned", "angular", "diameter", "radius"],
 ];
 
@@ -194,15 +194,15 @@ export function buildToolbar(
   addUtilityButton(model, "workplane", "Work Plane - offset / rotate a plane, like a saved UCS (WP)", () =>
     host.modelAction("workplane"),
   );
-  addUtilityButton(model, "extrude", "Extrude", () => host.modelAction("extrude"));
+  addUtilityButton(model, "extrude", "Extrude (E) - push a closed shape out into a solid, or cut with it", () => host.modelAction("extrude"));
   addUtilityButton(model, "revolve", "Revolve (R) - spin a closed shape round an axis line", () => host.modelAction("revolve"));
   addUtilityButton(model, "hole", "Hole (H) - click a face, place centres, set Ø / depth / c'bore / c'sink", () =>
     host.modelAction("hole"),
   );
-  addUtilityButton(model, "fillet", "Fillet (F) - round off edges: click edges, or a face for all its edges", () =>
+  addUtilityButton(model, "fillet3d", "Fillet (F) - round off edges: click edges, or a face for all its edges", () =>
     host.modelAction("fillet"),
   );
-  addUtilityButton(model, "chamfer", "Chamfer (CH) - bevel edges: click edges, or a face for all its edges", () =>
+  addUtilityButton(model, "chamfer3d", "Chamfer (CH) - bevel edges: click edges, or a face for all its edges", () =>
     host.modelAction("chamfer"),
   );
   model.appendChild(gap());

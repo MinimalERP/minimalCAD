@@ -197,28 +197,38 @@ function drawMirror(ctx: CanvasRenderingContext2D): void {
   line(ctx, 13, 17, 18, 17);
 }
 
+/** The sharp corner two lines would have made, dashed -- shared by Fillet
+ *  and Chamfer so they read as "this corner, changed". */
+function sharpCorner(ctx: CanvasRenderingContext2D): void {
+  ctx.save();
+  ctx.globalAlpha = 0.45;
+  ctx.lineWidth = 1;
+  dashed(ctx, () => {
+    line(ctx, 3, 10, 3, 17);
+    line(ctx, 3, 17, 10, 17);
+  });
+  ctx.restore();
+}
+
 function drawFillet(ctx: CanvasRenderingContext2D): void {
+  // two lines meeting in a rounded corner
+  sharpCorner(ctx);
   ctx.beginPath();
-  if (typeof ctx.roundRect === "function") {
-    ctx.roundRect(3, 3, 14, 14, 8);
-  } else {
-    ctx.rect(3, 3, 14, 14);
-  }
+  ctx.moveTo(3, 2);
+  ctx.lineTo(3, 10);
+  ctx.arcTo(3, 17, 10, 17, 7);
+  ctx.lineTo(18, 17);
   ctx.stroke();
 }
 
 function drawChamfer(ctx: CanvasRenderingContext2D): void {
-  const pts: [number, number][] = [
-    [3, 8],
-    [8, 3],
-    [17, 3],
-    [17, 17],
-    [3, 17],
-    [3, 8],
-  ];
+  // two lines meeting in a bevelled corner
+  sharpCorner(ctx);
   ctx.beginPath();
-  ctx.moveTo(pts[0]![0], pts[0]![1]);
-  for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+  ctx.moveTo(3, 2);
+  ctx.lineTo(3, 10);
+  ctx.lineTo(10, 17);
+  ctx.lineTo(18, 17);
   ctx.stroke();
 }
 
@@ -272,8 +282,9 @@ function drawCurvedArrow(ctx: CanvasRenderingContext2D, mirrored: boolean): void
   ctx.restore();
 }
 
-const drawUndo: Drawer = (ctx) => drawCurvedArrow(ctx, false);
-const drawRedo: Drawer = (ctx) => drawCurvedArrow(ctx, true);
+// Undo turns BACK: anticlockwise, its head at the left. Redo is its mirror.
+const drawUndo: Drawer = (ctx) => drawCurvedArrow(ctx, true);
+const drawRedo: Drawer = (ctx) => drawCurvedArrow(ctx, false);
 
 function drawZoomExtents(ctx: CanvasRenderingContext2D): void {
   const bracket = (x: number, y: number, dx: number, dy: number) => {
@@ -403,6 +414,59 @@ function drawCloud(ctx: CanvasRenderingContext2D): void {
 }
 
 // --- 3D / sketch workspace ---
+//
+// 3D feature icons are small SHADED solids (Inventor-style) rather than
+// line art: blue for the part, amber for what the feature adds or changes,
+// so each reads as what it does even at 20 px.
+
+const SOLID_TOP = "#9dbdf0";
+const SOLID_FRONT = "#5f88cc";
+const SOLID_SIDE = "#3d63a6";
+const ACCENT = "#f5b942";
+const ACCENT_DARK = "#c78a1c";
+const OUTLINE = "#10141c";
+const HOLE_DARK = "#161a22";
+
+/** Fills (and thinly outlines) a polygon. */
+function facet(ctx: CanvasRenderingContext2D, pts: [number, number][], fill: string): void {
+  ctx.beginPath();
+  ctx.moveTo(pts[0]![0], pts[0]![1]);
+  for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.save();
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** A shaded block seen from the front-right-top: front face at (x, y) size
+ *  w x h, receding by d. `top` recolours its top face. */
+function block(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, d: number, top = SOLID_TOP): void {
+  facet(ctx, [[x, y], [x + d, y - d], [x + w + d, y - d], [x + w, y]], top);
+  facet(ctx, [[x + w, y], [x + w + d, y - d], [x + w + d, y + h - d], [x + w, y + h]], SOLID_SIDE);
+  facet(ctx, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], SOLID_FRONT);
+}
+
+/** A solid arrow (shaft + filled head) from (x1, y1) to (x2, y2). */
+function solidArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, color: string): void {
+  const a = Math.atan2(y2 - y1, x2 - x1);
+  const head = 4;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.8;
+  line(ctx, x1, y1, x2 - Math.cos(a) * head * 0.6, y2 - Math.sin(a) * head * 0.6);
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - Math.cos(a - 0.5) * head, y2 - Math.sin(a - 0.5) * head);
+  ctx.lineTo(x2 - Math.cos(a + 0.5) * head, y2 - Math.sin(a + 0.5) * head);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
 
 /** Parallelogram "plane" seen at an angle -- shared by the sketch icons. */
 function planeOutline(ctx: CanvasRenderingContext2D): void {
@@ -416,10 +480,15 @@ function planeOutline(ctx: CanvasRenderingContext2D): void {
 }
 
 function drawNewSketch(ctx: CanvasRenderingContext2D): void {
-  planeOutline(ctx);
-  line(ctx, 9, 12.5, 16, 2);
-  line(ctx, 16, 2, 18, 3.5);
-  line(ctx, 18, 3.5, 11, 13.5);
+  // a plane with a pencil drawing on it
+  facet(ctx, [[1, 16], [6, 10], [19, 10], [14, 16]], "rgba(245, 185, 66, 0.45)");
+  ctx.save();
+  ctx.lineWidth = 1;
+  line(ctx, 5, 14, 9, 14);
+  line(ctx, 9, 14, 11, 12);
+  ctx.restore();
+  facet(ctx, [[10, 12.5], [16, 3], [18.5, 4.6], [12.5, 14]], "#e8e8e8");
+  facet(ctx, [[10, 12.5], [12.5, 14], [9.6, 15]], ACCENT_DARK);
 }
 
 function drawFinishSketch(ctx: CanvasRenderingContext2D): void {
@@ -431,63 +500,107 @@ function drawFinishSketch(ctx: CanvasRenderingContext2D): void {
 }
 
 function drawExtrude(ctx: CanvasRenderingContext2D): void {
-  ctx.strokeRect(2, 8, 12, 9);
-  line(ctx, 2, 8, 6, 5);
-  line(ctx, 14, 8, 18, 5);
-  line(ctx, 6, 5, 18, 5);
-  line(ctx, 18, 5, 18, 14);
-  line(ctx, 14, 17, 18, 14);
-  line(ctx, 8, 13, 8, 1);
-  arrowhead(ctx, 8, 1, -90);
+  // a block pushed up out of its (amber) profile
+  block(ctx, 2, 10, 11, 8, 5, ACCENT);
+  solidArrow(ctx, 10, 8.5, 10, 0.5, "#ffffff");
 }
 
 function drawRevolve(ctx: CanvasRenderingContext2D): void {
-  // a turned profile (half a vase) beside its dashed axis, and the turn arrow
-  dashed(ctx, () => line(ctx, 6, 1, 6, 19));
+  // a turned solid about its axis, with the turn arrow
+  const g = ctx.createLinearGradient(4, 0, 16, 0);
+  g.addColorStop(0, SOLID_SIDE);
+  g.addColorStop(0.45, SOLID_TOP);
+  g.addColorStop(1, SOLID_SIDE);
   ctx.beginPath();
-  ctx.moveTo(6, 4);
-  ctx.lineTo(12, 4);
-  ctx.lineTo(12, 8);
-  ctx.lineTo(16, 12);
-  ctx.lineTo(16, 16);
-  ctx.lineTo(6, 16);
-  ctx.stroke();
+  ctx.moveTo(4, 7);
+  ctx.lineTo(4, 15);
+  ctx.ellipse(10, 15, 6, 2.2, 0, Math.PI, 0, true);
+  ctx.lineTo(16, 7);
+  ctx.closePath();
+  ctx.fillStyle = g;
+  ctx.fill();
   ctx.beginPath();
-  ctx.ellipse(6, 10, 4.5, 1.8, 0, Math.PI * 0.55, Math.PI * 1.9);
+  ctx.ellipse(10, 7, 6, 2.2, 0, 0, Math.PI * 2);
+  ctx.fillStyle = ACCENT;
+  ctx.fill();
+  ctx.save();
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 0.7;
   ctx.stroke();
-  arrowhead(ctx, 10.2, 9.4, 70);
+  ctx.restore();
+  ctx.save();
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1.1;
+  ctx.setLineDash([3, 1.5, 0.8, 1.5]);
+  line(ctx, 10, 0.5, 10, 19.5);
+  ctx.setLineDash([]);
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.ellipse(10, 3, 5, 1.8, 0, Math.PI * 0.15, Math.PI * 0.95);
+  ctx.stroke();
+  ctx.restore();
+  solidArrow(ctx, 6.4, 4.4, 4.2, 2.2, "#ffffff");
 }
 
 function drawHole(ctx: CanvasRenderingContext2D): void {
-  // block with a drilled hole seen at an angle, and the drill axis
+  // a block with a hole drilled in its FRONT face (a full round circle,
+  // not a thin ellipse on top), and its centre mark
+  block(ctx, 1, 6, 14, 13, 4);
   ctx.beginPath();
-  ctx.moveTo(1, 9);
-  ctx.lineTo(7, 5);
-  ctx.lineTo(19, 5);
-  ctx.lineTo(13, 9);
-  ctx.closePath();
+  ctx.arc(8, 12.5, 4, 0, Math.PI * 2);
+  ctx.fillStyle = HOLE_DARK;
+  ctx.fill();
+  ctx.save();
+  ctx.strokeStyle = ACCENT;
+  ctx.lineWidth = 1.4;
   ctx.stroke();
-  line(ctx, 1, 9, 1, 17);
-  line(ctx, 13, 9, 13, 17);
-  line(ctx, 1, 17, 13, 17);
-  line(ctx, 19, 5, 19, 13);
-  line(ctx, 13, 17, 19, 13);
-  ctx.beginPath();
-  ctx.ellipse(10, 7, 3.2, 1.4, 0, 0, Math.PI * 2);
-  ctx.stroke();
-  dashed(ctx, () => line(ctx, 10, 1, 10, 15));
+  ctx.lineWidth = 0.9;
+  line(ctx, 8, 7, 8, 18);
+  line(ctx, 2.5, 12.5, 13.5, 12.5);
+  ctx.restore();
 }
 
-function drawWorkPlane(ctx: CanvasRenderingContext2D): void {
-  // tilted plane over a dashed base plane
-  dashed(ctx, () => planeOutline(ctx));
+/** The block both edge features are shown on: its top-front-right edge is
+ *  rounded (fillet) or bevelled (chamfer), that new face in amber. */
+function edgeBlock(ctx: CanvasRenderingContext2D, round: boolean): void {
+  facet(ctx, [[2, 6], [5, 3], [12, 3], [9, 6]], SOLID_TOP);
+  facet(ctx, [[15, 12], [18, 9], [18, 15], [15, 18]], SOLID_SIDE);
+  // the changed edge, as a band running back
   ctx.beginPath();
-  ctx.moveTo(3, 11);
-  ctx.lineTo(9, 3);
-  ctx.lineTo(19, 5);
-  ctx.lineTo(13, 13);
+  ctx.moveTo(9, 6);
+  if (round) ctx.arc(9, 12, 6, -Math.PI / 2, 0);
+  else ctx.lineTo(15, 12);
+  ctx.lineTo(18, 9);
+  if (round) ctx.arc(12, 9, 6, 0, -Math.PI / 2, true);
+  else ctx.lineTo(12, 3);
   ctx.closePath();
+  ctx.fillStyle = ACCENT;
+  ctx.fill();
+  // front face
+  ctx.beginPath();
+  ctx.moveTo(2, 18);
+  ctx.lineTo(2, 6);
+  ctx.lineTo(9, 6);
+  if (round) ctx.arc(9, 12, 6, -Math.PI / 2, 0);
+  else ctx.lineTo(15, 12);
+  ctx.lineTo(15, 18);
+  ctx.closePath();
+  ctx.fillStyle = SOLID_FRONT;
+  ctx.fill();
+  ctx.save();
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 0.7;
   ctx.stroke();
+  ctx.restore();
+}
+
+const drawFillet3d: Drawer = (ctx) => edgeBlock(ctx, true);
+const drawChamfer3d: Drawer = (ctx) => edgeBlock(ctx, false);
+
+function drawWorkPlane(ctx: CanvasRenderingContext2D): void {
+  // an amber plane tilted up off a (dashed) base plane
+  dashed(ctx, () => planeOutline(ctx));
+  facet(ctx, [[3, 12], [9, 3], [19, 5], [13, 14]], "rgba(245, 185, 66, 0.6)");
 }
 
 /** Cube in one of the standard orientations, `face` highlighted. */
@@ -574,6 +687,8 @@ const DRAWERS: Record<string, Drawer> = {
   revolve: drawRevolve,
   workplane: drawWorkPlane,
   hole: drawHole,
+  fillet3d: drawFillet3d,
+  chamfer3d: drawChamfer3d,
   viewfront: viewCube("front"),
   viewtop: viewCube("top"),
   viewright: viewCube("right"),
