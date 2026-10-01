@@ -56,3 +56,46 @@ describe("triangulate", () => {
     expect(tris).toHaveLength((2000 - 2) * 3);
   });
 });
+
+describe("triangulate: several holes", () => {
+  const circle = (cx: number, cy: number, r: number, n = 72): number[] => {
+    const o: number[] = [];
+    for (let i = 0; i < n; i++) o.push(cx + r * Math.cos((2 * Math.PI * i) / n), cy + r * Math.sin((2 * Math.PI * i) / n));
+    return o;
+  };
+  /** Sum of the triangles' areas: equals the region's own area only if they neither overlap nor leave gaps. */
+  const filled = (outer: number[], holes: number[][]): number => {
+    const flat = [...outer];
+    const idx: number[] = [];
+    for (const h of holes) {
+      idx.push(flat.length / 2);
+      flat.push(...h);
+    }
+    const t = triangulate(flat, idx);
+    let area = 0;
+    for (let k = 0; k < t.length; k += 3) {
+      const [a, b, c] = [t[k]!, t[k + 1]!, t[k + 2]!];
+      area += Math.abs((flat[b * 2]! - flat[a * 2]!) * (flat[c * 2 + 1]! - flat[a * 2 + 1]!) - (flat[b * 2 + 1]! - flat[a * 2 + 1]!) * (flat[c * 2]! - flat[a * 2]!)) / 2;
+    }
+    return area;
+  };
+  const plate = [0, 0, 80, 0, 80, 40, 0, 40];
+  const holeArea = (16 * 72 * Math.sin((2 * Math.PI) / 72)) / 2;
+
+  it("holes one above the other, in a grid, and on a diagonal all fill exactly", () => {
+    const cases: [number, number][][] = [
+      [[10, 10], [10, 30]], // a column: both holes' right edges level
+      [[10, 10], [30, 10]],
+      [[10, 10], [30, 30]],
+      [[30, 30], [10, 10]],
+      [[10, 10], [30, 10], [10, 30]],
+      [[10, 10], [30, 10], [10, 30], [30, 30]],
+      [10, 30, 50, 70].flatMap((x) => [10, 30].map((y) => [x, y] as [number, number])),
+      [[20, 8], [20, 20], [20, 32], [60, 8], [60, 20], [60, 32]],
+    ];
+    for (const centres of cases) {
+      const got = filled(plate, centres.map(([x, y]) => circle(x, y, 4)));
+      expect(got).toBeCloseTo(3200 - centres.length * holeArea, 6);
+    }
+  });
+});

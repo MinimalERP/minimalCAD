@@ -49,8 +49,13 @@ function findBridge(ring: readonly P[], m: P): number {
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i]!;
     const b = ring[(i + 1) % ring.length]!;
-    if ((a.y <= m.y && b.y >= m.y) || (b.y <= m.y && a.y >= m.y)) {
-      if (a.y === b.y) continue;
+    // Only an edge the ray reaches from INSIDE can be bridged to: the ring
+    // runs clockwise, so that is an edge going down. (An earlier hole's
+    // bridge is two coincident edges, one each way -- taking the upward one
+    // joins the wrong side of that slit and the fill overlaps itself. It
+    // happens whenever two holes are level with each other's right edge,
+    // e.g. one directly above the other.)
+    if (a.y > b.y && a.y >= m.y && b.y <= m.y) {
       const x = a.x + ((m.y - a.y) * (b.x - a.x)) / (b.y - a.y);
       if (x >= m.x && x < bestX) {
         bestX = x;
@@ -82,7 +87,10 @@ function findBridge(ring: readonly P[], m: P): number {
   let bestAngle = Infinity;
   for (let i = 0; i < ring.length; i++) {
     const p = ring[i]!;
-    if (i === candidate || p.x < m.x) continue;
+    // Another copy of the candidate itself (a corner earlier holes were
+    // bridged to appears once per bridge) is not "in the way" -- and taking
+    // it instead would join this hole on the wrong side of that bridge.
+    if (i === candidate || p.x < m.x || same(p, c)) continue;
     if (!pointInTriangle(m, hit, c, p)) continue;
     const angle = Math.abs(Math.atan2(p.y - m.y, p.x - m.x));
     if (angle < bestAngle) {
