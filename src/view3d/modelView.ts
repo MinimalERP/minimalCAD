@@ -61,6 +61,11 @@ export interface PickableRegion {
 export interface PlaneDisplay {
   key: string;
   frame: Frame;
+  /** A plane hinged on a model edge: the middle of the edge. The square is
+   *  then drawn rising from the hinge instead of round the frame's origin. */
+  hingeAt?: Vec3;
+  /** A plane tangent to a round face: the square is centred here. */
+  centerAt?: Vec3;
 }
 
 export type Hit =
@@ -322,13 +327,18 @@ export class ModelView {
   /** Translucent square for a plane frame: centered on its origin, or --
    *  `corner` -- spanning its positive quadrant, so the three origin planes
    *  meet at the UCS like the corner of a room. */
-  private planeMesh(key: string, frame: Frame, color: number, corner = false, size = this.planeSize): THREE.Mesh {
+  private planeMesh(key: string, frame: Frame, color: number, corner = false, size = this.planeSize, hingeAt?: Vec3, centerAt?: Vec3): THREE.Mesh {
     const [a, b] = corner ? [0, size] : [-size / 2, size / 2];
+    // Hinged: centred on the hinge's middle sideways, rising from it.
+    // Tangent: centred on its own point.
+    const h = hingeAt === undefined ? null : sub(hingeAt, frame.origin);
+    const c = centerAt === undefined ? null : sub(centerAt, frame.origin);
+    const [cx, y0] = h !== null ? [dot(h, frame.u), dot(h, frame.v)] : c !== null ? [dot(c, frame.u), dot(c, frame.v) + a] : [0, a];
     const corners = [
-      { x: a, y: a },
-      { x: b, y: a },
-      { x: b, y: b },
-      { x: a, y: b },
+      { x: cx + a, y: y0 },
+      { x: cx + b, y: y0 },
+      { x: cx + b, y: y0 + (b - a) },
+      { x: cx + a, y: y0 + (b - a) },
     ].map((p) => v3(localTo3d(frame, p)));
     const geo = new THREE.BufferGeometry().setFromPoints(corners);
     geo.setIndex([0, 1, 2, 0, 2, 3]);
@@ -433,7 +443,7 @@ export class ModelView {
     disposeChildren(this.workPlaneGroup);
     for (const key of [...this.planeMeshes.keys()]) if (key.startsWith("wp:")) this.planeMeshes.delete(key);
     for (const p of planes) {
-      const mesh = this.planeMesh(p.key, p.frame, WORKPLANE_COLOR);
+      const mesh = this.planeMesh(p.key, p.frame, WORKPLANE_COLOR, false, this.planeSize, p.hingeAt, p.centerAt);
       this.planeMeshes.set(`wp:${p.key}`, mesh);
       this.workPlaneGroup.add(mesh);
     }
@@ -441,14 +451,14 @@ export class ModelView {
   }
 
   /** Live preview of a work plane being defined (null clears). */
-  setPlanePreview(frame: Frame | null): void {
+  setPlanePreview(frame: Frame | null, hingeAt?: Vec3, centerAt?: Vec3): void {
     const old = this.previewGroup.children.find((c) => c.userData.key === "__planePreview");
     if (old !== undefined) {
       disposeChildren(old);
       this.previewGroup.remove(old);
     }
     if (frame !== null) {
-      const mesh = this.planeMesh("__planePreview", frame, WORKPLANE_COLOR);
+      const mesh = this.planeMesh("__planePreview", frame, WORKPLANE_COLOR, false, this.planeSize, hingeAt, centerAt);
       (mesh.material as THREE.MeshBasicMaterial).opacity = 0.3;
       this.previewGroup.add(mesh);
     }

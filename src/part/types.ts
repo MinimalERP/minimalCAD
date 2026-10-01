@@ -51,7 +51,65 @@ export interface WorkPlane {
   offset: string;
   angle: string;
   axis: "u" | "v";
+  /** Present = a plane tied to the model instead (base / axis unused), see
+   *  workPlane.ts. `offset` always moves it along its own normal:
+   *  - hinge:    on a straight edge of a flat face, tilted `angle` degrees
+   *              from that face;
+   *  - parallel: parallel to a flat face;
+   *  - tangent:  touching a round face, `angle` degrees round its axis
+   *              (offset out from the surface; negative = into the part);
+   *  - mid:      halfway between two parallel flat faces;
+   *  - points:   through three points of the model (kept as coordinates). */
+  on?: ModelPlaneRef;
 }
+
+/** Parallel to a flat face. */
+export interface ParallelPlaneRef {
+  face: TopoRef;
+  parallel: true;
+}
+
+/** Halfway between two parallel flat faces. */
+export interface MidPlaneRef {
+  face: TopoRef;
+  face2: TopoRef;
+}
+
+/** Through three points (world coordinates, as picked). */
+export interface PointsPlaneRef {
+  points: [XYZ, XYZ, XYZ];
+}
+
+export interface XYZ {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export type ModelPlaneRef = FacePlaneRef | TangentPlaneRef | ParallelPlaneRef | MidPlaneRef | PointsPlaneRef;
+export type ModelPlaneKind = "hinge" | "tangent" | "parallel" | "mid" | "points";
+
+export function modelPlaneKind(on: ModelPlaneRef): ModelPlaneKind {
+  if ("points" in on) return "points";
+  if ("tangent" in on) return "tangent";
+  if ("parallel" in on) return "parallel";
+  if ("face2" in on) return "mid";
+  return "hinge";
+}
+
+/** The flat face a work plane starts from, and its edge to hinge on. */
+export interface FacePlaneRef {
+  face: TopoRef;
+  hinge: EdgeRef;
+}
+
+/** The round face a work plane is tangent to. */
+export interface TangentPlaneRef {
+  face: TopoRef;
+  tangent: true;
+}
+
+
 
 export interface SketchData {
   id: string;
@@ -82,6 +140,18 @@ export interface ExtrudeFeature {
   operation: FeatureOperation;
   /** Absent = "distance" (older files). */
   extent?: ExtrudeExtent;
+  /** Expression, degrees: the sides slope IN by this much as they leave the
+   *  sketch plane (negative = flare out). Absent = straight sides. */
+  taper?: string;
+  /** Expression, degrees off square to the sketch plane. Absent = square. */
+  lean?: string;
+  /** Expression, degrees in the sketch: which way it leans (0 = toward the
+   *  sketch's right, 90 = its up). */
+  leanToward?: string;
+  /** With a lean: "footprint" (absent) = the drawn shape is the footprint on
+   *  the sketch plane; "square" = it is the cross-section square to the lean
+   *  (a drawn circle makes a truly round boss). */
+  section?: "square";
   suppressed?: boolean;
 }
 
@@ -163,6 +233,17 @@ export interface HoleFeature {
   csDiameter?: string;
   /** Included countersink angle, degrees (default 90). */
   csAngle?: string;
+  /** Expression, degrees: how far the drill leans off straight-in (absent =
+   *  square to a flat face / straight at a round face's axis). */
+  lean?: string;
+  /** Expression, degrees: which way it leans, in face coordinates. Flat
+   *  face: 0 = the face's horizontal, 90 = its vertical. Round face: 0 =
+   *  along the axis, 90 = round the shaft (the hole then misses the axis). */
+  leanToward?: string;
+  /** Round face, leaning along the axis only: "axis" = each centre's
+   *  distance along the shaft locates where the hole's centreline CROSSES
+   *  THE AXIS, instead of (absent) where the drill enters the surface. */
+  locate?: "axis";
   suppressed?: boolean;
 }
 
@@ -344,7 +425,8 @@ function parseFeature(raw: unknown): FeatureData | null {
     };
     if (raw.extent === "through" || raw.extent === "toAxis") hole.extent = raw.extent;
     if (raw.placement === "radial") hole.placement = "radial";
-    for (const key of ["cbDiameter", "cbDepth", "csDiameter", "csAngle"] as const) {
+    if (raw.locate === "axis") hole.locate = "axis";
+    for (const key of ["cbDiameter", "cbDepth", "csDiameter", "csAngle", "lean", "leanToward"] as const) {
       const v = opt(raw[key]);
       if (v !== undefined) hole[key] = v;
     }
@@ -382,6 +464,10 @@ function parseFeature(raw: unknown): FeatureData | null {
       direction,
       operation: raw.operation === "join" || raw.operation === "cut" ? raw.operation : "new",
       ...(raw.extent === "through" ? { extent: "through" as const } : {}),
+      ...Object.fromEntries(
+        (["taper", "lean", "leanToward"] as const).flatMap((k) => (typeof raw[k] === "string" || typeof raw[k] === "number" ? [[k, String(raw[k])]] : [])),
+      ),
+      ...(raw.section === "square" ? { section: "square" as const } : {}),
       suppressed: raw.suppressed === true,
     };
   }
@@ -392,13 +478,29 @@ function parseWorkPlane(raw: unknown): WorkPlane | null {
   if (!isObject(raw) || typeof raw.id !== "string") return null;
   const expr = (v: unknown, dflt: string): string =>
     typeof v === "string" ? v : typeof v === "number" ? String(v) : dflt;
-  return {
+  const wp: WorkPlane = {
     id: raw.id,
     base: BASES.includes(raw.base as BasePlane) ? (raw.base as BasePlane) : "XY",
     offset: expr(raw.offset, "0"),
     angle: expr(raw.angle, "0"),
     axis: raw.axis === "v" ? "v" : "u",
   };
+  if (isObject(raw.on)) {
+    const face = parseTopoRef(raw.on.face);
+    const face2 = parseTopoRef(raw.on.face2);
+    const hinge = parseEdgeRef(raw.on.hinge);
+    const xyz = (v: unknown): XYZ | null =>
+      isObject(v) && typeof v.x === "number" && typeof v.y === "number" && typeof v.z === "number" ? { x: v.x, y: v.y, z: v.z } : null;
+    const pts = Array.isArray(raw.on.points) ? raw.on.points.map(xyz) : [];
+    if (pts.length === 3 && pts.every((q) => q !== null)) wp.on = { points: pts as [XYZ, XYZ, XYZ] };
+    else if (face === null) return null; // a model plane without its references is nothing
+    else if (raw.on.tangent === true) wp.on = { face, tangent: true };
+    else if (raw.on.parallel === true) wp.on = { face, parallel: true };
+    else if (face2 !== null) wp.on = { face, face2 };
+    else if (hinge !== null) wp.on = { face, hinge };
+    else return null;
+  }
+  return wp;
 }
 
 export function isBasePlane(base: string): base is BasePlane {

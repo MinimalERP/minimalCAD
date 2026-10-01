@@ -48,7 +48,7 @@ export interface BlendEdge {
   at: Vec3;
 }
 
-function modelTol(body: Body): number {
+export function modelTol(body: Body): number {
   let size = 1;
   const p = body.mesh.positions;
   for (let i = 0; i < p.length; i++) size = Math.max(size, Math.abs(p[i]!));
@@ -80,7 +80,7 @@ function arcPoints(g: Extract<Edge["geom"], { kind: "arc" }>): Vec3[] {
 }
 
 /** The faces meeting along `edge` (by the mesh triangles touching it). */
-function edgeFaceIds(body: Body, probe: Vec3, tol: number): number[] {
+export function edgeFaceIds(body: Body, probe: Vec3, tol: number): number[] {
   const { indices, faceIds } = body.mesh;
   const ids = new Set<number>();
   for (let t = 0; t < faceIds.length; t++) {

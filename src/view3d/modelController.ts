@@ -26,7 +26,8 @@ import { parseEntities } from "../core/document";
 import type { Point } from "../core/types";
 import type { Entity } from "../entities/entity";
 import type { HoleFeature, PartData, PlaneRef } from "../part/types";
-import { DRAWING_SKETCH, emptyPart, isEdgeFeature, nextId, parsePart, usesSketch } from "../part/types";
+import { DRAWING_SKETCH, emptyPart, isEdgeFeature, modelPlaneKind, nextId, parsePart, usesSketch } from "../part/types";
+import type { ModelPlaneRef } from "../part/types";
 import { rebuild, resolvePlane } from "../part/rebuild";
 import type { RebuildResult } from "../part/rebuild";
 import { projectBodies } from "../part/project";
@@ -156,7 +157,7 @@ export class ModelController {
     this.view.setBodies(this.result.bodies);
     this.showWireframes(part);
     this.view.setWorkPlanes(
-      [...this.result.planes.values()].flatMap((p) => (p.frame === null ? [] : [{ key: p.id, frame: p.frame }])),
+      [...this.result.planes.values()].flatMap((p) => (p.frame === null ? [] : [{ key: p.id, frame: p.frame, hingeAt: p.hingeAt, centerAt: p.centerAt }])),
     );
     this.view.updateOriginScale();
     this.renderBrowser(part);
@@ -408,7 +409,11 @@ export class ModelController {
       const ang = evalExpression(wp.angle, this.params());
       const [u, v] = planeAxes(wp.base);
       const tilt = ang !== null && ang !== 0 ? `, ${ang}° about ${wp.axis === "u" ? u : v}` : "";
-      row(wp.id, wp.id, `${wp.base} ${off ?? wp.offset} mm${tilt}`, "◇", () => this.run(() => new WorkPlaneCommand(this.ctx, wp)), {
+      const detail =
+        wp.on !== undefined
+          ? modelPlaneSummary(wp.on, `${ang ?? wp.angle}`) + (off !== null && off !== 0 ? `, ${off} mm` : "")
+          : `${wp.base} ${off ?? wp.offset} mm${tilt}`;
+      row(wp.id, wp.id, detail, "◇", () => this.run(() => new WorkPlaneCommand(this.ctx, wp)), {
         error: g?.error,
       });
     }
@@ -450,10 +455,25 @@ export class ModelController {
       const value = evalExpression(f.distance, this.params());
       const amount = f.extent === "through" ? "through all" : value === null ? f.distance : `${+value.toFixed(3)} mm`;
       const from = f.sketch === DRAWING_SKETCH ? " (2D)" : "";
-      row(f.id, f.id, `${OPERATION_LABEL[f.operation]} ${amount}${from}`, "▣", () => this.editFeature(f.id), { error });
+      const deg = (e: string | undefined, label: string): string => {
+        const v = e === undefined ? 0 : evalExpression(e, this.params());
+        return v === 0 ? "" : `, ${label} ${v === null ? e : +v.toFixed(3)}°`;
+      };
+      row(f.id, f.id, `${OPERATION_LABEL[f.operation]} ${amount}${deg(f.taper, "taper")}${deg(f.lean, "lean")}${from}`, "▣", () => this.editFeature(f.id), { error });
     }
     for (const sketch of part.sketches) sketchRow(sketch.id);
   }
+}
+
+/** "45° from face of Extrude001" -- tree detail of a plane tied to the model. */
+function modelPlaneSummary(on: ModelPlaneRef, angle: string): string {
+  const kind = modelPlaneKind(on);
+  if (kind === "points") return "through 3 points";
+  const of = `face of ${(on as { face: { feature: string } }).face.feature}`;
+  if (kind === "tangent") return `tangent at ${angle}° on ${of}`;
+  if (kind === "parallel") return `parallel to ${of}`;
+  if (kind === "mid") return `between ${of} and ${(on as { face2: { feature: string } }).face2.feature}`;
+  return `${angle}° from ${of}`;
 }
 
 /** "Ø10 thru ×2 · c'bore Ø18×6" -- tree detail. */
@@ -470,7 +490,8 @@ function holeSummary(f: HoleFeature, params: ReadonlyMap<string, number>): strin
       : f.style === "countersink"
         ? ` · c'sink Ø${v(f.csDiameter)} ${v(f.csAngle)}°`
         : "";
-  return `Ø${v(f.diameter)} ${depth}${f.placement === "radial" ? " radial" : ""}${count}${extra}`;
+  const lean = f.lean === undefined ? "" : ` · lean ${v(f.lean)}°${f.locate === "axis" ? " (to axis crossing)" : ""}`;
+  return `Ø${v(f.diameter)} ${depth}${f.placement === "radial" ? " radial" : ""}${count}${extra}${lean}`;
 }
 
 /** Short description of where a sketch lives. */

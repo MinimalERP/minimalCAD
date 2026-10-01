@@ -9,6 +9,7 @@
 
 import { parseEntities } from "../core/document";
 import { extrudeRegions } from "./kernel/extrude";
+import { extrudeShaped } from "./kernel/extrudeShaped";
 import { revolveRegions } from "./kernel/revolveRegion";
 import type { AxisLine } from "./kernel/revolveRegion";
 import type { Point } from "../core/types";
@@ -27,7 +28,9 @@ import { faceFrame, offsetFrame, planeFrame, toLocal, workPlaneFrame } from "./p
 import type { Frame } from "./plane";
 import { findProfiles, regionContains } from "./profile";
 import type { ProfileResult, Region } from "./profile";
-import type { EdgeFeature, ExtrudeFeature, HoleFeature, PartData, PlaneRef, RevolveAxis, RevolveFeature, SketchData } from "./types";
+import type { EdgeFeature, ExtrudeFeature, HoleFeature, PartData, PlaneRef, RevolveAxis, RevolveFeature, SketchData, WorkPlane } from "./types";
+import { modelPlane } from "./workPlane";
+import type { Vec3 } from "./vec3";
 import { isEdgeFeature } from "./types";
 import { edgeTools } from "./edgeBlend";
 import { holeTools } from "./hole";
@@ -42,6 +45,10 @@ export interface WorkPlaneGeometry {
   id: string;
   frame: Frame | null;
   error?: string;
+  /** A plane hinged on a model edge: the middle of that edge (display). */
+  hingeAt?: Vec3;
+  /** A plane tangent to a round face: where to centre its square (display). */
+  centerAt?: Vec3;
 }
 
 export interface SketchGeometry {
@@ -113,6 +120,7 @@ export function revolveSweep(feature: Pick<RevolveFeature, "extent" | "angle" | 
 export function resolveWorkPlanes(part: PartData, params: ReadonlyMap<string, number>): Map<string, WorkPlaneGeometry> {
   const planes = new Map<string, WorkPlaneGeometry>();
   for (const wp of part.planes) {
+    if (wp.on !== undefined) continue; // tied to the model: resolved against its bodies (resolveModelPlane)
     const offset = evalExpression(wp.offset, params);
     const angle = evalExpression(wp.angle, params);
     planes.set(
@@ -123,6 +131,15 @@ export function resolveWorkPlanes(part: PartData, params: ReadonlyMap<string, nu
     );
   }
   return planes;
+}
+
+/** A work plane tied to the model, against the bodies as they stand. */
+export function resolveModelPlane(wp: WorkPlane, bodies: readonly Body[], params: ReadonlyMap<string, number>): WorkPlaneGeometry {
+  const offset = evalExpression(wp.offset, params);
+  const angle = evalExpression(wp.angle, params);
+  if (offset === null || angle === null) return { id: wp.id, frame: null, error: `Invalid ${offset === null ? "offset" : "angle"}` };
+  const plane = wp.on === undefined ? "Not a model plane" : modelPlane(wp.on, bodies, angle, offset);
+  return typeof plane === "string" ? { id: wp.id, frame: null, error: plane } : { id: wp.id, ...plane };
 }
 
 /** Frame of a flat face (by topological ref) among `bodies`, or null. */
@@ -227,6 +244,35 @@ export function extrudeExtent(direction: ExtrudeFeature["direction"], distance: 
   if (direction === "reverse") return [-distance, 0];
   if (direction === "symmetric") return [-distance / 2, distance / 2];
   return [0, distance];
+}
+
+/**
+ * An Extrude's solid between heights h0 and h1: square and straight, or
+ * with its taper / lean. Returns the body, or why it can't be made.
+ */
+export function extrudeTool(
+  feature: Pick<ExtrudeFeature, "id" | "taper" | "lean" | "leanToward" | "section">,
+  regions: readonly Region[],
+  frame: Frame,
+  h0: number,
+  h1: number,
+  params: ReadonlyMap<string, number>,
+): Body | string {
+  const value = (e: string | undefined): number | null => (e === undefined || e.trim() === "" ? 0 : evalExpression(e, params));
+  const taper = value(feature.taper);
+  const lean = value(feature.lean);
+  const toward = value(feature.leanToward);
+  if (taper === null || Math.abs(taper) >= 89) return "Taper must be an angle between -89 and 89";
+  if (lean === null || lean < 0 || lean > 85) return "Lean must be an angle from 0 to 85";
+  if (toward === null) return "Lean direction must be an angle";
+  if (taper === 0 && lean === 0) return extrudeRegions(feature.id, regions, frame, h0, h1);
+  const t = Math.tan((lean * Math.PI) / 180);
+  const a = (toward * Math.PI) / 180;
+  return extrudeShaped(feature.id, regions, frame, h0, h1, {
+    tanTaper: Math.tan((taper * Math.PI) / 180),
+    shear: lean === 0 ? { x: 0, y: 0 } : { x: t * Math.cos(a), y: t * Math.sin(a) },
+    square: feature.section === "square",
+  });
 }
 
 /** The tab's 2D drafting drawing as the part's XY base sketch. */
@@ -346,6 +392,10 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
     if (cached !== undefined) return cached;
     const sketch = part.sketches.find((s) => s.id === id);
     if (sketch === undefined) return undefined;
+    // A plane tied to the model is fixed the first time something needs it,
+    // against the solids built so far (like a sketch on a face).
+    const wp = part.planes.find((p) => p.id === sketch.plane.base);
+    if (wp?.on !== undefined && !planes.has(wp.id)) planes.set(wp.id, resolveModelPlane(wp, bodies, params));
     const frame = resolvePlane(sketch.plane, planes, bodies);
     if (frame === null) return undefined;
     const geo = sketchGeometry(sketch, frame);
@@ -401,10 +451,11 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
     }
     // Through all: the tool reaches past the model in the chosen direction(s).
     const [h0, h1] = through && feature.direction === "symmetric" ? [-distance, distance] : extrudeExtent(feature.direction, distance);
-    const tool = extrudeRegions(feature.id, regions, geo.frame, h0, h1);
-    status.set(feature.id, applyOperation(bodies, tool, feature.operation));
+    const tool = extrudeTool(feature, regions, geo.frame, h0, h1, params);
+    status.set(feature.id, typeof tool === "string" ? { ok: false, error: tool } : applyOperation(bodies, tool, feature.operation));
   }
   for (const sketch of part.sketches) resolveSketch(sketch.id);
+  for (const wp of part.planes) if (wp.on !== undefined && !planes.has(wp.id)) planes.set(wp.id, resolveModelPlane(wp, bodies, params));
   return { bodies, status, sketches, planes, params };
 }
 

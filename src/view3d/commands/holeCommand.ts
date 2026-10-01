@@ -61,7 +61,11 @@ export class HoleCommand implements ModelCommand {
   private selection: Selection = null;
   private style: HoleStyle = "plain";
   private termination: Termination = "through";
-  private v = { diameter: "10", depth: "20", cbDiameter: "18", cbDepth: "6", csDiameter: "20", csAngle: "90" };
+  private v = { diameter: "10", depth: "20", cbDiameter: "18", cbDepth: "6", csDiameter: "20", csAngle: "90", lean: "0", leanToward: "0" };
+  /** Round face, leaning along the axis: what a centre's distance along the shaft locates. */
+  private locate: "entry" | "axis" = "entry";
+  private leanRows!: { setVisible(v: boolean): void };
+  private locateChoice!: ChoiceHandle<"entry" | "axis">;
 
   /** The picked face's own straight edges and circle centres (face coords);
    *  on a round face, its end rims, seams, flats and main-plane lines. */
@@ -100,7 +104,10 @@ export class HoleCommand implements ModelCommand {
         cbDepth: editing.cbDepth ?? "6",
         csDiameter: editing.csDiameter ?? "20",
         csAngle: editing.csAngle ?? "90",
+        lean: editing.lean ?? "0",
+        leanToward: editing.leanToward ?? "0",
       };
+      this.locate = editing.locate === "axis" ? "axis" : "entry";
     }
 
     const d = (this.dialog = new FeatureDialog(ctx.dialogParent, editing === null ? "Hole" : `Edit ${editing.id}`, {
@@ -150,6 +157,23 @@ export class HoleCommand implements ModelCommand {
       d.number("C'sink Ø", "mm", this.v.csDiameter, (t) => this.set("csDiameter", t)),
       d.number("C'sink angle", "°", this.v.csAngle, (t) => this.set("csAngle", t)),
     ];
+    d.number("Lean", "°", this.v.lean, (t) => this.set("lean", t));
+    this.leanRows = d.rowGroup(() => {
+      d.number("Lean toward", "°", this.v.leanToward, (t) => this.set("leanToward", t));
+      this.locateChoice = d.choice<"entry" | "axis">(
+        "Distance to",
+        [
+          { value: "entry", label: "Entry point", title: "Distances locate where the drill enters the surface" },
+          { value: "axis", label: "Axis crossing", title: "The distance along the shaft locates where the hole's centreline crosses the axis" },
+        ],
+        this.locate,
+        (v) => {
+          this.locate = v;
+          this.update();
+        },
+      );
+    });
+    d.hint("Lean tips the drill off straight-in. Lean toward: 0 = along the face's horizontal (on a round face: along the shaft), 90 = across.");
 
     if (editing !== null) {
       // Face as built *before* this hole (its own cut doesn't move it).
@@ -670,7 +694,23 @@ export class HoleCommand implements ModelCommand {
       f.csDiameter = this.v.csDiameter;
       f.csAngle = this.v.csAngle;
     }
+    if (this.leaning()) {
+      f.lean = this.v.lean;
+      f.leanToward = this.v.leanToward;
+      if (this.locate === "axis" && this.canLocateAxis()) f.locate = "axis";
+    }
     return f;
+  }
+
+  private leaning(): boolean {
+    const a = evalExpression(this.v.lean, this.ctx.params());
+    return a !== null && a !== 0;
+  }
+
+  /** The axis-crossing option only makes sense on a round face, leaning along the shaft. */
+  private canLocateAxis(): boolean {
+    const toward = evalExpression(this.v.leanToward, this.ctx.params());
+    return this.cyl() !== null && this.leaning() && toward !== null && Math.abs(Math.sin((toward * Math.PI) / 180)) < 1e-9;
   }
 
   private update(): void {
@@ -682,6 +722,8 @@ export class HoleCommand implements ModelCommand {
     this.depthField.setVisible(this.termination === "distance");
     this.cbFields.forEach((f) => f.setVisible(this.style === "counterbore"));
     this.csFields.forEach((f) => f.setVisible(this.style === "countersink"));
+    this.leanRows.setVisible(this.leaning());
+    this.locateChoice.setVisible(this.canLocateAxis());
     this.faceSel.set(
       this.face === null ? "Click on a face" : cyl !== null ? `Round face Ø${+(2 * cyl.radius).toFixed(3)}` : "Flat face",
       this.face !== null,

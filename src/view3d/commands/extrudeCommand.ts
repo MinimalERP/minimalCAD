@@ -9,8 +9,7 @@
 
 import type { ExtrudeDirection, ExtrudeFeature, FeatureOperation } from "../../part/types";
 import { DRAWING_SKETCH, isExtrude, nextId, usesSketch } from "../../part/types";
-import { extrudeExtent, selectRegions, throughLength } from "../../part/rebuild";
-import { extrudeRegions } from "../../part/kernel/extrude";
+import { extrudeExtent, extrudeTool, selectRegions, throughLength } from "../../part/rebuild";
 import { regionContains, regionSeed } from "../../part/profile";
 import { toLocal } from "../../part/plane";
 import { evalExpression } from "../../part/params";
@@ -30,6 +29,10 @@ export class ExtrudeCommand implements ModelCommand {
   private direction: ExtrudeDirection = "normal";
   private through = false;
   private distance = "10";
+  /** Taper / lean (degrees, as typed) and what the drawn shape is under a lean. */
+  private shape = { taper: "0", lean: "0", leanToward: "0" };
+  private square = true;
+  private leanRows!: { setVisible(v: boolean): void };
   private selection: SelectionHandle;
   private distanceField: FieldHandle;
   private directionChoice: ChoiceHandle<ExtrudeDirection>;
@@ -67,6 +70,8 @@ export class ExtrudeCommand implements ModelCommand {
       this.direction = editing.direction;
       this.through = editing.extent === "through";
       this.distance = editing.distance;
+      this.shape = { taper: editing.taper ?? "0", lean: editing.lean ?? "0", leanToward: editing.leanToward ?? "0" };
+      this.square = editing.section === "square" || editing.lean === undefined;
     }
 
     this.dialog = new FeatureDialog(ctx.dialogParent, editing === null ? "Extrude" : `Edit ${editing.id}`, {
@@ -120,7 +125,36 @@ export class ExtrudeCommand implements ModelCommand {
         this.update();
       },
     );
-    d.hint(editing === null ? "Click inside closed shapes in the view to pick or unpick them." : "");
+    d.number("Taper", "°", this.shape.taper, (t) => {
+      this.shape.taper = t;
+      this.update();
+    });
+    d.number("Lean", "°", this.shape.lean, (t) => {
+      this.shape.lean = t;
+      this.update();
+    });
+    this.leanRows = d.rowGroup(() => {
+      d.number("Lean toward", "°", this.shape.leanToward, (t) => {
+        this.shape.leanToward = t;
+        this.update();
+      });
+      d.choice<"square" | "footprint">(
+        "Drawn shape is",
+        [
+          { value: "square", label: "Section", title: "The shape you drew is the body's cross-section, square to the lean - a drawn circle makes a truly round boss" },
+          { value: "footprint", label: "Footprint", title: "The shape you drew is the footprint on the sketch plane - a drawn circle stays a circle there" },
+        ],
+        this.square ? "square" : "footprint",
+        (v) => {
+          this.square = v === "square";
+          this.update();
+        },
+      );
+    });
+    d.hint(
+      (editing === null ? "Click inside closed shapes in the view to pick or unpick them. " : "") +
+        "Taper slopes the sides in (minus = out). Lean tips the whole body; Lean toward is the direction in the sketch (0 = right, 90 = up).",
+    );
 
     if (editing === null) this.startPicking();
     this.update();
@@ -183,6 +217,7 @@ export class ExtrudeCommand implements ModelCommand {
   /** Validates, updates the dialog state and the live preview. */
   private update(): void {
     this.distanceField.setVisible(!this.through);
+    this.leanRows.setVisible(this.leaning());
     const n = this.editing !== null ? -1 : this.chosen.length;
     this.selection.set(
       this.editing !== null
@@ -211,16 +246,47 @@ export class ExtrudeCommand implements ModelCommand {
     }
     const regions = selectRegions(geo.profiles.regions, this.profiles);
     const [h0, h1] = this.through && this.direction === "symmetric" ? [-distance, distance] : extrudeExtent(this.direction, distance);
-    this.ctx.view.setPreview(
-      regions.length > 0 ? extrudeRegions("preview", regions, geo.frame, h0, h1) : null,
-      this.operation === "cut",
-    );
+    const tool = regions.length > 0 ? extrudeTool({ id: "preview", ...this.shapeData() }, regions, geo.frame, h0, h1, this.ctx.params()) : null;
+    if (typeof tool === "string") this.dialog.setError(tool);
+    this.ctx.view.setPreview(typeof tool === "string" ? null : tool, this.operation === "cut");
+  }
+
+  private leaning(): boolean {
+    const v = evalExpression(this.shape.lean, this.ctx.params());
+    return v !== null && v !== 0;
+  }
+
+  /** Taper / lean as stored: only what is actually used. */
+  private shapeData(): Pick<ExtrudeFeature, "taper" | "lean" | "leanToward" | "section"> {
+    const used = (e: string): boolean => evalExpression(e, this.ctx.params()) !== 0;
+    const out: Pick<ExtrudeFeature, "taper" | "lean" | "leanToward" | "section"> = {};
+    if (used(this.shape.taper)) out.taper = this.shape.taper;
+    if (used(this.shape.lean)) {
+      out.lean = this.shape.lean;
+      out.leanToward = this.shape.leanToward;
+      if (this.square) out.section = "square";
+    }
+    return out;
+  }
+
+  /** The solid the dialog describes can actually be built. */
+  private buildable(): boolean {
+    const r = this.ctx.result();
+    const geo = this.sketchId === null ? undefined : r?.sketches.get(this.sketchId);
+    if (geo === undefined || this.profiles === null) return false;
+    const regions = selectRegions(geo.profiles.regions, this.profiles);
+    const distance = this.through ? throughLength(r?.bodies ?? [], geo.frame) : evalExpression(this.distance, this.ctx.params());
+    if (regions.length === 0 || distance === null || !(distance > 0)) return false;
+    const [h0, h1] = this.through && this.direction === "symmetric" ? [-distance, distance] : extrudeExtent(this.direction, distance);
+    return typeof extrudeTool({ id: "check", ...this.shapeData() }, regions, geo.frame, h0, h1, this.ctx.params()) !== "string";
   }
 
   ok(): void {
     this.update();
     if (this.sketchId === null || this.profiles === null) return;
     if (!this.through && !((evalExpression(this.distance, this.ctx.params()) ?? 0) > 0)) return;
+    if (!this.buildable()) return;
+    const shape = this.shapeData();
     const sketch = this.sketchId;
     const profiles = this.profiles;
     const hadBodies = (this.ctx.result()?.bodies.length ?? 0) > 0;
@@ -237,6 +303,8 @@ export class ExtrudeCommand implements ModelCommand {
           Object.assign(f, data);
           if (this.through) f.extent = "through";
           else delete f.extent;
+          for (const k of ["taper", "lean", "leanToward", "section"] as const) delete f[k];
+          Object.assign(f, shape);
         }
         return;
       }
@@ -247,6 +315,7 @@ export class ExtrudeCommand implements ModelCommand {
         profiles,
         ...data,
         ...(this.through ? { extent: "through" as const } : {}),
+        ...shape,
       });
     });
     if (!hadBodies) this.ctx.view.fit();

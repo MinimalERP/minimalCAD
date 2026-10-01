@@ -24,7 +24,8 @@ import type { Frame } from "./plane";
 import { localTo3d } from "./plane";
 import { evalExpression } from "./params";
 import type { HoleDim, HoleFeature, HoleRef } from "./types";
-import { scale } from "./vec3";
+import type { Vec3 } from "./vec3";
+import { add, cross, scale, sub } from "./vec3";
 
 const DRILL_POINT_DEG = 118;
 
@@ -33,13 +34,15 @@ export function holeProfile(
   h: Pick<HoleFeature, "style" | "extent">,
   values: { d: number; depth: number; cbD?: number; cbDepth?: number; csD?: number; csAngle?: number },
   throughLen: number,
+  /** Extra start height: a leaning drill's flat end must clear the face all round. */
+  extraLead = 0,
 ): RZ[] | string {
   const r = values.d / 2;
   if (!(r > 0)) return "Diameter must be positive";
   const through = h.extent === "through";
   const depth = through ? throughLen : values.depth;
   if (!(depth > 0)) return "Depth must be positive";
-  const lead = Math.max(0.5, r * 0.2); // start above the face
+  const lead = Math.max(0.5, r * 0.2) + extraLead; // start above the face
 
   const top: RZ[] = [];
   if (h.style === "counterbore") {
@@ -162,6 +165,47 @@ export function dependsOn(h: Pick<HoleFeature, "centers">, from: number, on: num
   return false;
 }
 
+/** How a hole leans: off straight-in by `angle`, toward `toward` (radians,
+ *  in face coordinates), or null when it goes straight in. */
+export function holeLean(h: Pick<HoleFeature, "lean" | "leanToward">, params: ReadonlyMap<string, number>): { angle: number; toward: number } | null | string {
+  const value = (e: string | undefined): number | null => (e === undefined || e.trim() === "" ? 0 : evalExpression(e, params));
+  const lean = value(h.lean);
+  const toward = value(h.leanToward);
+  if (lean === null || lean < 0 || lean > 80) return "Lean must be an angle from 0 to 80";
+  if (toward === null) return "Lean direction must be an angle";
+  return lean === 0 ? null : { angle: (lean * Math.PI) / 180, toward: (toward * Math.PI) / 180 };
+}
+
+/** True if a leaning hole on a round face leans along the axis only (its
+ *  centreline still crosses the axis). */
+export function leansAlongAxis(lean: { toward: number }): boolean {
+  return Math.abs(Math.sin(lean.toward)) < 1e-9;
+}
+
+/**
+ * Where the drill enters and which way it goes, for the centre `c` on
+ * `frame`. Straight-in unless `lean`; with `atAxis` (round face, leaning
+ * along the axis) `c.x` locates the point where the centreline crosses the
+ * shaft's axis, and the entry point is worked back from there.
+ */
+export function drillAxis(frame: Surface, c: Point, lean: { angle: number; toward: number } | null, atAxis: boolean): { origin: Vec3; dir: Vec3 } {
+  const cyl = isCyl(frame) ? frame : null;
+  const out = cyl === null ? (frame as Frame).n : radialDir(cyl, c.y);
+  const entry = cyl === null ? localTo3d(frame as Frame, c) : cylTo3d(cyl, c);
+  if (lean === null) return { origin: entry, dir: scale(out, -1) };
+  // In-face directions the lean is measured in: flat = (u, v); round = (along the axis, round the shaft).
+  const t1 = cyl === null ? (frame as Frame).u : cyl.axis;
+  const t2 = cyl === null ? (frame as Frame).v : cross(cyl.axis, out);
+  const toward = add(scale(t1, Math.cos(lean.toward)), scale(t2, Math.sin(lean.toward)));
+  const dir = add(scale(out, -Math.cos(lean.angle)), scale(toward, Math.sin(lean.angle)));
+  if (cyl !== null && atAxis) {
+    // Back from the crossing point on the axis to the surface.
+    const crossing = add(cyl.origin, scale(cyl.axis, c.x));
+    return { origin: sub(crossing, scale(dir, cyl.radius / Math.cos(lean.angle))), dir };
+  }
+  return { origin: entry, dir };
+}
+
 /** One cutter body per centre, or an error message. */
 export function holeTools(
   h: HoleFeature,
@@ -174,19 +218,31 @@ export function holeTools(
   const depth = ev(h.depth);
   if (d === undefined || Number.isNaN(d)) return `Invalid diameter "${h.diameter}"`;
   const cyl = isCyl(frame) ? frame : null;
+  const lean = holeLean(h, params);
+  if (typeof lean === "string") return lean;
+  const alongAxis = lean === null || leansAlongAxis(lean);
   if (h.extent === "toAxis" && cyl === null) return "To axis is only for holes on a round face";
+  if (h.extent === "toAxis" && !alongAxis) return "A hole leaning round the shaft misses the axis - use Distance or Through all";
+  const atAxis = h.locate === "axis" && cyl !== null && lean !== null;
+  if (atAxis && !alongAxis) return "The distance can locate the axis crossing only when the hole leans along the axis";
+  // Along its own (leaning) line everything is longer by 1 / cos(lean).
+  const stretch = lean === null ? 1 : 1 / Math.cos(lean.angle);
+  const widestR = Math.max(d, h.style === "counterbore" ? (ev(h.cbDiameter) ?? 0) : 0, h.style === "countersink" ? (ev(h.csDiameter) ?? 0) : 0) / 2;
   if (h.extent === undefined && (depth === undefined || Number.isNaN(depth))) return `Invalid depth "${h.depth}"`;
   const profile = holeProfile(
     { style: h.style, extent: h.extent === "through" ? "through" : undefined },
     {
       d,
-      depth: h.extent === "toAxis" ? cyl!.radius : (depth ?? 0),
+      depth: h.extent === "toAxis" ? cyl!.radius * stretch : (depth ?? 0),
       cbD: ev(h.cbDiameter),
       cbDepth: ev(h.cbDepth),
       csD: ev(h.csDiameter),
       csAngle: ev(h.csAngle),
     },
-    throughLen,
+    // A leaning drill's flat end is tilted to the far face: go further by
+    // its radius x tan(lean) so the whole end is out the other side.
+    throughLen * stretch + (lean === null ? 0 : widestR * Math.tan(lean.angle)),
+    lean === null ? 0 : widestR * Math.tan(lean.angle),
   );
   if (typeof profile === "string") return profile;
   if (cyl !== null) {
@@ -196,10 +252,6 @@ export function holeTools(
   const centers = resolveCenters(h, params);
   if (typeof centers === "string") return centers;
   return centers.map((c: Point, i) => {
-    const axis =
-      cyl === null
-        ? { origin: localTo3d(frame as Frame, c), dir: scale((frame as Frame).n, -1) }
-        : { origin: cylTo3d(cyl, c), dir: scale(radialDir(cyl, c.y), -1) };
-    return revolveProfile(h.id, `${i}`, profile, axis);
+    return revolveProfile(h.id, `${i}`, profile, drillAxis(frame, c, lean, atAxis));
   });
 }
