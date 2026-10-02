@@ -200,6 +200,7 @@ export class ModelView {
   private regionMeshes: { mesh: THREE.Mesh; region: PickableRegion }[] = [];
   private bodyMeshes: THREE.Mesh[] = [];
   private faceHighlight = new THREE.Group();
+  private highlightedFaceKey: string | null = null;
 
   private pickMode: "none" | "plane" | "region" | "facePoint" | "surfacePoint" | "edge" = "none";
   /** Edge-pick candidates (world polylines). */
@@ -480,6 +481,8 @@ export class ModelView {
   // --- content ---
 
   setBodies(bodies: readonly Body[]): void {
+    this.highlightedFaceKey = null;
+    disposeChildren(this.faceHighlight);
     disposeChildren(this.contentGroup);
     this.snapCache.clear();
     this.bodyMeshes = [];
@@ -578,7 +581,11 @@ export class ModelView {
     const step = 1e-3;
     const ax = at({ x: p.x + step, y: p.y });
     const ay = at({ x: p.x, y: p.y + step });
-    return { x: Math.hypot(ax.x - o.x, ax.y - o.y) / step, y: Math.hypot(ay.x - o.x, ay.y - o.y) / step };
+    const dxx = ax.x - o.x;
+    const dxy = ax.y - o.y;
+    const dyx = ay.x - o.x;
+    const dyy = ay.y - o.y;
+    return { x: Math.sqrt(dxx * dxx + dxy * dxy) / step, y: Math.sqrt(dyx * dyx + dyy * dyy) / step };
   }
 
   /** Highlighted segments on a face (picked / hovered edges), in yellow. */
@@ -760,17 +767,22 @@ export class ModelView {
     this.edgeCandidates.forEach((line, i) => {
       let best = Infinity;
       let at: THREE.Vector3 | null = null;
-      for (let k = 0; k + 1 < line.length; k++) {
-        const a = screen(line[k]!);
-        const b = screen(line[k + 1]!);
+      const screenLine = line.map(screen);
+      for (let k = 0; k + 1 < screenLine.length; k++) {
+        const a = screenLine[k]!;
+        const b = screenLine[k + 1]!;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const len2 = dx * dx + dy * dy;
         const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((mx - a.x) * dx + (my - a.y) * dy) / len2));
-        const d = Math.hypot(mx - (a.x + t * dx), my - (a.y + t * dy));
+        const ex = mx - (a.x + t * dx);
+        const ey = my - (a.y + t * dy);
+        const d = Math.sqrt(ex * ex + ey * ey);
         if (d < best) {
           best = d;
-          at = a.w.clone().lerp(b.w, t);
+          if (d <= SNAP_PX) {
+            at = a.w.clone().lerp(b.w, t);
+          }
         }
       }
       if (best <= SNAP_PX && at !== null) found.push({ i, d: best, at });
@@ -818,6 +830,8 @@ export class ModelView {
   }
 
   setPickMode(mode: "none" | "plane" | "region", regions: readonly PickableRegion[] = []): void {
+    this.highlightedFaceKey = null;
+    disposeChildren(this.faceHighlight);
     this.faceFrame = null;
     this.edgeCandidates = [];
     disposeChildren(this.edgeGroup);
@@ -869,7 +883,7 @@ export class ModelView {
         const s = v3(localTo3d(frame, c.point)).project(this.camera);
         const px = ((s.x + 1) / 2) * rect.width - (e.clientX - rect.left);
         const py = ((1 - s.y) / 2) * rect.height - (e.clientY - rect.top);
-        const d = Math.hypot(px, py);
+        const d = Math.sqrt(px * px + py * py);
         if (d < bestD) {
           bestD = d;
           best = c;
@@ -929,7 +943,9 @@ export class ModelView {
       let bestD = SNAP_PX;
       for (const c of this.faceSnaps(body, face.id, frame)) {
         const s = v3(localTo3d(frame, c.point)).project(this.camera);
-        const d = Math.hypot(((s.x + 1) / 2) * rect.width - (e.clientX - rect.left), ((1 - s.y) / 2) * rect.height - (e.clientY - rect.top));
+        const px = ((s.x + 1) / 2) * rect.width - (e.clientX - rect.left);
+        const py = ((1 - s.y) / 2) * rect.height - (e.clientY - rect.top);
+        const d = Math.sqrt(px * px + py * py);
         if (d < bestD) {
           bestD = d;
           best = c;
@@ -1027,6 +1043,9 @@ export class ModelView {
 
   /** Tints the hovered solid face (sketch-on-face picking). */
   private highlightFace(hit: Hit | null): void {
+    const key = hit?.kind === "face" ? `${hit.body.id}:${hit.faceId}` : null;
+    if (key === this.highlightedFaceKey) return;
+    this.highlightedFaceKey = key;
     disposeChildren(this.faceHighlight);
     if (hit?.kind !== "face") return;
     const { positions, indices, faceIds } = hit.body.mesh;

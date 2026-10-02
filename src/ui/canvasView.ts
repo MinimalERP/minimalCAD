@@ -33,7 +33,7 @@
 import { computeGridLines } from "../engine/grid";
 import { entityAt, gripAt } from "../engine/picking";
 import type { Viewport } from "../engine/viewport";
-import { pointDistance, type Bounds, type Point } from "../core/types";
+import { pointDistance, type Point } from "../core/types";
 import type { Entity } from "../entities/entity";
 import type { Engine } from "../engine/engine";
 import type { GripCommand } from "../commands/types";
@@ -1059,7 +1059,15 @@ export class CanvasView {
 
     // Constraints are live: whatever moved since the last frame, everything
     // constrained settles back to where its constraints put it.
-    if (this.engine.document.constraints.length > 0) enforceConstraints(this.engine.document);
+    if (
+      this.engine.document.constraints.length > 0 &&
+      (this.engine.document.constraintsDirty || this.dragEntities !== null || this.engine.commandManager.currentCommand !== null)
+    ) {
+      enforceConstraints(this.engine.document);
+      if (this.dragEntities === null && this.engine.commandManager.currentCommand === null) {
+        this.engine.document.constraintsDirty = false;
+      }
+    }
 
     if (this.engine.backdrop !== null) this.engine.backdrop(ctx);
     else this.drawGrid();
@@ -1215,9 +1223,10 @@ export class CanvasView {
   }
 
   private drawEntities(): void {
-    const visible = this.viewport.visibleWorldRect();
+    const [vx0, vy0, vx1, vy1] = this.viewport.visibleWorldRect();
     for (const entity of this.engine.document.getEntities()) {
-      if (entityVisible(entity.getBounds(), visible)) {
+      const [ex0, ey0, ex1, ey1] = entity.getBounds();
+      if (ex1 >= vx0 && ex0 <= vx1 && ey1 >= vy0 && ey0 <= vy1) {
         entity.draw(this.ctx, this.viewport, false);
       }
     }
@@ -1490,28 +1499,38 @@ export class CanvasView {
 
     ctx.lineWidth = 1;
 
+    // Batched grid lines
+    ctx.strokeStyle = COLOR_GRID;
+    ctx.beginPath();
     for (const { x, isAxis } of verticals) {
+      if (isAxis) continue;
       const sx = this.viewport.worldToScreen({ x, y: 0 }).x;
-      ctx.strokeStyle = isAxis ? COLOR_AXIS : COLOR_GRID;
-      ctx.beginPath();
       ctx.moveTo(sx + 0.5, 0);
       ctx.lineTo(sx + 0.5, height);
-      ctx.stroke();
     }
-
     for (const { y, isAxis } of horizontals) {
+      if (isAxis) continue;
       const sy = this.viewport.worldToScreen({ x: 0, y }).y;
-      ctx.strokeStyle = isAxis ? COLOR_AXIS : COLOR_GRID;
-      ctx.beginPath();
       ctx.moveTo(0, sy + 0.5);
       ctx.lineTo(width, sy + 0.5);
-      ctx.stroke();
     }
-  }
-}
+    ctx.stroke();
 
-function entityVisible(entityBounds: Bounds, visibleRect: Bounds): boolean {
-  const [ex0, ey0, ex1, ey1] = entityBounds;
-  const [vx0, vy0, vx1, vy1] = visibleRect;
-  return ex1 >= vx0 && ex0 <= vx1 && ey1 >= vy0 && ey0 <= vy1;
+    // Batched axis lines
+    ctx.strokeStyle = COLOR_AXIS;
+    ctx.beginPath();
+    for (const { x, isAxis } of verticals) {
+      if (!isAxis) continue;
+      const sx = this.viewport.worldToScreen({ x, y: 0 }).x;
+      ctx.moveTo(sx + 0.5, 0);
+      ctx.lineTo(sx + 0.5, height);
+    }
+    for (const { y, isAxis } of horizontals) {
+      if (!isAxis) continue;
+      const sy = this.viewport.worldToScreen({ x: 0, y }).y;
+      ctx.moveTo(0, sy + 0.5);
+      ctx.lineTo(width, sy + 0.5);
+    }
+    ctx.stroke();
+  }
 }

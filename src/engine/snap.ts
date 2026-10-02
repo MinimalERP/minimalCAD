@@ -8,7 +8,7 @@
  * hover fallback, Nearest.
  */
 
-import type { Point } from "../core/types";
+import { boundsOverlap, type Point } from "../core/types";
 import type { Entity } from "../entities/entity";
 import { Line } from "../entities/line";
 import { Circle } from "../entities/circle";
@@ -35,7 +35,9 @@ export interface SnapMatch {
 type CircleLike = Circle | Arc;
 
 function dist(a: Point, b: Point): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 function boundsNear(entity: Entity, pos: Point, radius: number): boolean {
@@ -87,23 +89,31 @@ function findEndpoint(worldPos: Point, entities: Entity[], tolerance: number): P
 function findIntersection(worldPos: Point, entities: Entity[], tolerance: number): Point | null {
   const lines = entities.filter((e): e is Line => e instanceof Line);
   const radials = entities.filter((e): e is CircleLike => e instanceof Circle || e instanceof Arc);
+  const lineBounds = lines.map((l) => l.getBounds());
+  const radialBounds = radials.map((r) => r.getBounds());
 
   for (let i = 0; i < lines.length; i++) {
+    const b1 = lineBounds[i]!;
     for (let j = i + 1; j < lines.length; j++) {
+      if (!boundsOverlap(b1, lineBounds[j]!, tolerance)) continue;
       for (const pt of findIntersections(lines[i]!, lines[j]!, 0)) {
         if (dist(worldPos, pt) <= tolerance) return pt;
       }
     }
   }
-  for (const line of lines) {
-    for (const radial of radials) {
-      for (const pt of findIntersections(line, radial, 0)) {
+  for (let i = 0; i < lines.length; i++) {
+    const bl = lineBounds[i]!;
+    for (let j = 0; j < radials.length; j++) {
+      if (!boundsOverlap(bl, radialBounds[j]!, tolerance)) continue;
+      for (const pt of findIntersections(lines[i]!, radials[j]!, 0)) {
         if (dist(worldPos, pt) <= tolerance) return pt;
       }
     }
   }
   for (let i = 0; i < radials.length; i++) {
+    const b1 = radialBounds[i]!;
     for (let j = i + 1; j < radials.length; j++) {
+      if (!boundsOverlap(b1, radialBounds[j]!, tolerance)) continue;
       for (const pt of findIntersections(radials[i]!, radials[j]!, 0)) {
         if (dist(worldPos, pt) <= tolerance) return pt;
       }
@@ -181,7 +191,7 @@ function findPerpendicular(
     } else if (entity instanceof Circle || entity instanceof Arc) {
       const c = entity.center;
       const v = { x: referencePoint.x - c.x, y: referencePoint.y - c.y };
-      const vLen = Math.hypot(v.x, v.y);
+      const vLen = Math.sqrt(v.x * v.x + v.y * v.y);
       if (vLen === 0) continue;
       const pt: Point = { x: c.x + (v.x / vLen) * entity.radius, y: c.y + (v.y / vLen) * entity.radius };
       const angle = Math.atan2(pt.y - c.y, pt.x - c.x);
@@ -246,7 +256,7 @@ function findNearest(worldPos: Point, entities: Entity[], tolerance: number): Po
       if (dist(worldPos, nearest) <= tolerance) return nearest;
     } else if (entity instanceof Circle || entity instanceof Arc) {
       const v = { x: worldPos.x - entity.center.x, y: worldPos.y - entity.center.y };
-      const vLen = Math.hypot(v.x, v.y);
+      const vLen = Math.sqrt(v.x * v.x + v.y * v.y);
       if (vLen === 0) continue;
       const nearest: Point = {
         x: entity.center.x + (v.x / vLen) * entity.radius,

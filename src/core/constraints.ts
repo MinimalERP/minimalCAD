@@ -265,10 +265,7 @@ export function referenceGeometry(entity: Drivable): NonNullable<Constraint["ref
 }
 
 export function entityById(document: Document, entityId: string): Entity | null {
-  for (const entity of document.getEntities()) {
-    if (entity.id === entityId) return entity;
-  }
-  return null;
+  return document.getEntityById(entityId);
 }
 
 /** Perpendicular foot of `pt` on segment p1-p2, clamped to the segment --

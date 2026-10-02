@@ -448,7 +448,7 @@ function buildFileMenu(
   });
   addItem("Export DXF", draftingOnly, () => {
     const filename = promptFilename("Export DXF", "dxf");
-    if (filename !== null) exportDxfToFile(getActiveEngine().document, filename);
+    if (filename !== null) void exportDxfToFile(getActiveEngine().document, filename);
   });
   addItem("Export PDF", draftingOnly, () => getActiveEngine().commandManager.startCommand("pdfexport"));
   addItem("Insert from Library", draftingOnly, () => getActiveEngine().commandManager.startCommand("insertlib"));

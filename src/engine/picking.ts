@@ -16,7 +16,13 @@ import { Circle } from "../entities/circle";
 import { Dimension } from "../entities/dimension";
 
 export function entityAt<T extends Entity>(entities: T[], worldPos: Point, tolerance: number): T | null {
+  const wx = worldPos.x;
+  const wy = worldPos.y;
   for (const entity of entities) {
+    const [x0, y0, x1, y1] = entity.getBounds();
+    if (wx < x0 - tolerance || wx > x1 + tolerance || wy < y0 - tolerance || wy > y1 + tolerance) {
+      continue;
+    }
     if (entity.hitTest(worldPos, tolerance)) return entity;
   }
   return null;

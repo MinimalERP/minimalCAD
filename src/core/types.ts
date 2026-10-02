@@ -27,7 +27,9 @@ export function pointScale(p: Point, s: number): Point {
 }
 
 export function pointDistance(a: Point, b: Point): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 /** Axis-aligned bounding box as [minX, minY, maxX, maxY]. */
@@ -35,4 +37,8 @@ export type Bounds = [number, number, number, number];
 
 export function unionBounds(a: Bounds, b: Bounds): Bounds {
   return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+}
+
+export function boundsOverlap(a: Bounds, b: Bounds, tol = 0): boolean {
+  return a[0] <= b[2] + tol && b[0] <= a[2] + tol && a[1] <= b[3] + tol && b[1] <= a[3] + tol;
 }
