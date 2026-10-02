@@ -14,7 +14,6 @@ import type { Bounds, Point } from "../core/types";
 import type { Engine } from "../engine/engine";
 import { BaseCommand } from "./base";
 import { parsePoint, parseTwoPositiveFloats } from "../input/dynamicInput";
-import { exportPdf } from "../io/pdf";
 import type { PdfScaleMode } from "../io/pdf";
 import { downloadPdfBytes, promptFilename } from "../io/saveLoad";
 
@@ -174,25 +173,27 @@ export class ExportPdfCommand extends BaseCommand {
   }
 
   private runExport(rect: Bounds): void {
-    const result = exportPdf(this.document, rect, this.scaleMode);
-    if (result === null) {
-      this.commandBar.setStatus("PDF EXPORT", "Nothing to export - drawing is empty");
+    void import("../io/pdf").then(({ exportPdf }) => {
+      const result = exportPdf(this.document, rect, this.scaleMode);
+      if (result === null) {
+        this.commandBar.setStatus("PDF EXPORT", "Nothing to export - drawing is empty");
+        this.start();
+        return;
+      }
+
+      const filename = promptFilename("Export PDF", "pdf");
+      if (filename !== null) downloadPdfBytes(result.bytes, filename);
+
+      if (result.warning !== null) {
+        this.commandBar.setStatus("PDF EXPORT", `${result.warning} - Pick First Corner for another export`);
+        this.state = 0;
+        this.corner1 = null;
+        this.currentMousePos = null;
+        this.pendingRect = null;
+        this.commandBar.enableInput();
+        return;
+      }
       this.start();
-      return;
-    }
-
-    const filename = promptFilename("Export PDF", "pdf");
-    if (filename !== null) downloadPdfBytes(result.bytes, filename);
-
-    if (result.warning !== null) {
-      this.commandBar.setStatus("PDF EXPORT", `${result.warning} - Pick First Corner for another export`);
-      this.state = 0;
-      this.corner1 = null;
-      this.currentMousePos = null;
-      this.pendingRect = null;
-      this.commandBar.enableInput();
-      return;
-    }
-    this.start();
+    });
   }
 }

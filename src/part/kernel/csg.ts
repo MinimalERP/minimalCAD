@@ -151,7 +151,10 @@ class BspNode {
     while (stack.length > 0) {
       const [node, polys] = stack.pop()!;
       if (polys.length === 0) continue;
-      if (node.plane === null) node.plane = { normal: polys[0]!.normal, w: polys[0]!.w };
+      if (node.plane === null) {
+        const pivot = polys[polys.length >> 1]!;
+        node.plane = { normal: pivot.normal, w: pivot.w };
+      }
       const front: Polygon[] = [];
       const back: Polygon[] = [];
       for (const p of polys) splitPolygon(node.plane, p, node.polygons, node.polygons, front, back);

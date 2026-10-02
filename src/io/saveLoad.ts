@@ -18,7 +18,6 @@
 import type { Document } from "../core/document";
 import { parseDocumentJson, serializeDocument } from "./fileFormat";
 import type { ParseJsonResult } from "./fileFormat";
-import { exportDxf, importDxf } from "./dxf";
 import type { ImportDxfResult } from "./dxf";
 
 function timestamp(): string {
@@ -70,7 +69,8 @@ export function saveDocumentToFile(doc: Document, filename = `minimalcad-${times
 
 /** Exports `doc` to a plain-text DXF file (matching the desktop app's
  *  file_io/dxf.py output exactly) -- see io/dxf.ts for the format itself. */
-export function exportDxfToFile(doc: Document, filename = `minimalcad-${timestamp()}.dxf`): void {
+export async function exportDxfToFile(doc: Document, filename = `minimalcad-${timestamp()}.dxf`): Promise<void> {
+  const { exportDxf } = await import("./dxf");
   downloadBlob(exportDxf(doc), "application/dxf", filename);
 }
 
@@ -134,7 +134,10 @@ export function pickAndReadDxfFile(): Promise<ImportDxfResult | null> {
       }
       file
         .arrayBuffer()
-        .then((buffer) => resolve(importDxf(buffer)))
+        .then(async (buffer) => {
+          const { importDxf } = await import("./dxf");
+          resolve(importDxf(buffer));
+        })
         .catch(() => resolve(null));
     });
 

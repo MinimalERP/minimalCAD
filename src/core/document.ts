@@ -35,6 +35,8 @@ export interface ParseResult {
 export class Document {
   entities: Entity[] = [];
   constraints: unknown[] = [];
+  constraintsDirty = true;
+  private entityMap: Map<string, Entity> | null = null;
 
   /** Set while this document is a part sketch: finds the reference geometry
    *  (a projected edge of the solid, as it is NOW) a constraint measures
@@ -44,15 +46,33 @@ export class Document {
   part: unknown = undefined;
   sheets: unknown = undefined;
 
+  getEntityById(id: string): Entity | null {
+    if (this.entityMap === null) {
+      this.entityMap = new Map();
+      for (const e of this.entities) {
+        if (e.id !== undefined) this.entityMap.set(e.id, e);
+      }
+    }
+    return this.entityMap.get(id) ?? null;
+  }
+
   addEntity(entity: Entity): void {
     if (!this.entities.includes(entity)) {
       this.entities.push(entity);
+      if (this.entityMap !== null && entity.id !== undefined) {
+        this.entityMap.set(entity.id, entity);
+      }
+      this.constraintsDirty = true;
     }
   }
 
   removeEntity(entity: Entity): void {
     const idx = this.entities.indexOf(entity);
     if (idx !== -1) this.entities.splice(idx, 1);
+    if (this.entityMap !== null && entity.id !== undefined) {
+      this.entityMap.delete(entity.id);
+    }
+    this.constraintsDirty = true;
 
     // Purge any constraint referencing this entity's id -- a no-op today
     // since v1 never creates constraints, but keeps removeEntity's contract
@@ -69,6 +89,8 @@ export class Document {
   clear(): void {
     this.entities = [];
     this.constraints = [];
+    this.entityMap = null;
+    this.constraintsDirty = true;
     this.part = undefined;
     this.sheets = undefined;
   }
@@ -106,6 +128,8 @@ export class Document {
     this.constraints = structuredClone(data.constraints ?? []);
     this.part = data.part === undefined ? undefined : structuredClone(data.part);
     this.sheets = data.sheets === undefined ? undefined : structuredClone(data.sheets);
+    this.entityMap = null;
+    this.constraintsDirty = true;
     return result;
   }
 }
