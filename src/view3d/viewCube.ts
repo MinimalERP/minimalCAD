@@ -5,7 +5,8 @@
  * AutoCAD-style ViewCube: a small labelled cube in the corner that always
  * mirrors the main camera's orientation. Clicking a face, edge or corner
  * snaps the main view to look from that direction (Z-up world: TOP = +Z,
- * FRONT = -Y, RIGHT = +X).
+ * FRONT = -Y, RIGHT = +X). Arrows round it step the view: ◀ ▶ ▲ ▼ by
+ * 90° (Shift: 15°), the curved ones 45° about the vertical.
  */
 
 import * as THREE from "three";
@@ -52,12 +53,40 @@ export class ViewCube {
   /** Called with the direction to look FROM (unit vector, world space). */
   onPick: ((dir: THREE.Vector3) => void) | null = null;
   onHome: (() => void) | null = null;
+  /** An arrow: turn the view by these degrees -- round the vertical
+   *  (+ = the camera moves clockwise seen from above, e.g. Front -> Right)
+   *  and up / down (+ = look from higher). */
+  onOrbit: ((azimuth: number, elevation: number) => void) | null = null;
 
   constructor(parent: HTMLElement) {
+    const wrap = document.createElement("div");
+    wrap.className = "v3d-overlay view-cube-wrap";
+    parent.appendChild(wrap);
     this.el = document.createElement("canvas");
-    this.el.className = "v3d-overlay view-cube";
+    this.el.className = "view-cube";
     this.el.title = "Click a face, edge or corner to view from there";
-    parent.appendChild(this.el);
+    wrap.appendChild(this.el);
+    const arrows: { cls: string; text: string; title: string; az: number; el: number; fine: boolean }[] = [
+      { cls: "up", text: "▲", title: "Tilt the view up: look from above (90°, Shift: 15°)", az: 0, el: 90, fine: true },
+      { cls: "down", text: "▼", title: "Tilt the view down: look from below (90°, Shift: 15°)", az: 0, el: -90, fine: true },
+      { cls: "left", text: "◀", title: "Go to the view on the left (90°, Shift: 15°)", az: 90, el: 0, fine: true },
+      { cls: "right", text: "▶", title: "Go to the view on the right (90°, Shift: 15°)", az: -90, el: 0, fine: true },
+      { cls: "ccw", text: "↺", title: "Turn the model anticlockwise 45°", az: 45, el: 0, fine: false },
+      { cls: "cw", text: "↻", title: "Turn the model clockwise 45°", az: -45, el: 0, fine: false },
+    ];
+    for (const a of arrows) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `vc-arrow ${a.cls}`;
+      b.textContent = a.text;
+      b.title = a.title;
+      b.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus on the 3D view
+      b.addEventListener("click", (e) => {
+        const k = a.fine && e.shiftKey ? 15 / 90 : 1;
+        this.onOrbit?.(a.az * k, a.el * k);
+      });
+      wrap.appendChild(b);
+    }
     this.renderer = new THREE.WebGLRenderer({ canvas: this.el, antialias: true, alpha: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(110, 110, false);

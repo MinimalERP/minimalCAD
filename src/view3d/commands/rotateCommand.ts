@@ -14,7 +14,7 @@ import type { PatternAxis, RotateFeature, XYZ, EdgeRef } from "../../part/types"
 import { nextId } from "../../part/types";
 import { rebuild } from "../../part/rebuild";
 import type { AxisEdge } from "../../part/rotateBody";
-import { axisEdgeRef, axisEdges, moveBody, rotateTargets, rotateTransform } from "../../part/rotateBody";
+import { axisEdgeRef, axisEdges, moveBody, rotateSelection, rotateTransform, samePiece } from "../../part/rotateBody";
 import type { Hit } from "../modelView";
 import { FeatureDialog } from "../featureDialog";
 import type { ChoiceHandle, SelectionHandle } from "../featureDialog";
@@ -28,8 +28,10 @@ export class RotateCommand implements ModelCommand {
   /** The model as it is before this feature. */
   private bodies: readonly Body[];
   private candidates: AxisEdge[] = [];
-  /** Features whose bodies turn; null = all. */
-  private picked: string[] | null = null;
+  /** The picked solids (feature + a point on it); null = all bodies. */
+  private picked: { feature: string; at: XYZ }[] | null = null;
+  /** Older files: whole features' bodies. */
+  private legacyBodies: string[] | undefined;
   private axis: AxisChoice = "Z";
   private axisEdge: (EdgeRef & { a: XYZ; b: XYZ }) | null = null;
   private axisFace: TopoRef | null = null;
@@ -57,7 +59,8 @@ export class RotateCommand implements ModelCommand {
       const part = ctx.part();
       const upTo = { ...part, features: part.features.slice(0, part.features.findIndex((x) => x.id === editing.id)) };
       bodies = rebuild(upTo, ctx.drawingEntities()).bodies;
-      this.picked = editing.bodies?.slice() ?? null;
+      this.picked = editing.pieces?.map((x) => ({ ...x })) ?? null;
+      this.legacyBodies = editing.bodies?.slice();
       this.angle = editing.angle;
       this.axisEdge = editing.axisEdge ?? null;
       this.axisFace = editing.axisFace ?? null;
@@ -76,6 +79,7 @@ export class RotateCommand implements ModelCommand {
         label: "All bodies",
         onClick: () => {
           this.picked = null;
+          this.legacyBodies = undefined;
           this.update();
         },
       },
@@ -121,9 +125,14 @@ export class RotateCommand implements ModelCommand {
   onPick(hit: Hit): void {
     if (this.stage === "bodies") {
       if (hit.kind !== "face") return;
-      const id = hit.body.feature;
+      if (hit.at === undefined) return;
+      const at = hit.at;
+      const body = hit.body;
       const list = this.picked ?? [];
-      this.picked = list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
+      // Again on a picked solid drops it.
+      const same = (x: { feature: string; at: XYZ }): boolean => x.feature === body.feature && samePiece(body, x.at, at);
+      this.picked = list.some(same) ? list.filter((x) => !same(x)) : [...list, { feature: body.feature, at }];
+      this.legacyBodies = undefined;
       if (this.picked.length === 0) this.picked = null;
     } else if (hit.kind === "edge") {
       const e = this.candidates[hit.index];
@@ -156,7 +165,8 @@ export class RotateCommand implements ModelCommand {
 
   private feature(): RotateFeature {
     const f: RotateFeature = { id: this.editing?.id ?? "RotatePreview", type: "rotate", angle: this.angle };
-    if (this.picked !== null) f.bodies = this.picked.slice();
+    if (this.picked !== null) f.pieces = this.picked.map((x) => ({ ...x }));
+    else if (this.legacyBodies !== undefined) f.bodies = this.legacyBodies.slice();
     if (this.axis !== "model") f.axis = this.axis;
     else if (this.axisEdge !== null) f.axisEdge = this.axisEdge;
     else if (this.axisFace !== null) f.axisFace = this.axisFace;
@@ -169,15 +179,19 @@ export class RotateCommand implements ModelCommand {
     const f = this.feature();
     const t = rotateTransform(f, this.bodies, this.ctx.params());
     if (typeof t === "string") return t;
-    const targets = rotateTargets(f, this.bodies);
-    if (targets.length === 0) return "Click a face of each solid to turn";
-    return targets.map((b) => moveBody(b, t));
+    const sel = rotateSelection(f, this.bodies);
+    if (sel.targets.size === 0) return "Click a face of each solid to turn";
+    return [...sel.targets].map((b) => moveBody(b, t));
   }
 
   private update(): void {
     this.axisChoice.set(this.axis);
     this.axisRows.setVisible(this.axis === "model");
-    this.bodiesSel.set(this.picked === null ? "All bodies" : `Solids of ${this.picked.join(", ")}`, true);
+    const n = this.picked?.length ?? 0;
+    this.bodiesSel.set(
+      this.picked !== null ? `${n} solid${n === 1 ? "" : "s"} picked` : this.legacyBodies !== undefined ? `Solids of ${this.legacyBodies.join(", ")}` : "All bodies",
+      true,
+    );
     this.axisSel?.set(
       this.axisEdge !== null ? "Edge" : this.axisFace !== null ? `Round face of ${this.axisFace.feature}` : "Click an edge or a round face",
       this.axisEdge !== null || this.axisFace !== null,

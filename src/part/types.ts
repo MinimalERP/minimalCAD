@@ -315,9 +315,13 @@ export interface PatternFeature {
 export interface RotateFeature {
   id: string;
   type: "rotate";
-  /** Features whose bodies turn (a body belongs to the feature that made
-   *  it); absent = every body. */
+  /** Older files: features whose bodies turn (a body belongs to the
+   *  feature that made it). Absent (and no `pieces`) = every body. */
   bodies?: string[];
+  /** The solids to turn, each as picked: the feature whose body it is, and
+   *  a point on it -- so one piece of a body (e.g. one of several shapes
+   *  extruded together) can turn on its own. */
+  pieces?: { feature: string; at: XYZ }[];
   /** Origin axis (used when neither axisEdge nor axisFace is set). */
   axis?: PatternAxis;
   /** A straight model edge: found again by its two faces (EdgeRef, so it
@@ -494,6 +498,13 @@ function parseFeature(raw: unknown): FeatureData | null {
       suppressed: raw.suppressed === true,
     };
     if (Array.isArray(raw.bodies)) f.bodies = raw.bodies.filter((x): x is string => typeof x === "string");
+    if (Array.isArray(raw.pieces)) {
+      f.pieces = raw.pieces.flatMap((x) =>
+        isObject(x) && typeof x.feature === "string" && isObject(x.at) && typeof x.at.x === "number" && typeof x.at.y === "number" && typeof x.at.z === "number"
+          ? [{ feature: x.feature, at: { x: x.at.x, y: x.at.y, z: x.at.z } }]
+          : [],
+      );
+    }
     if (raw.axis === "X" || raw.axis === "Y" || raw.axis === "Z") f.axis = raw.axis;
     const face = parseTopoRef(raw.axisFace);
     if (face !== null) f.axisFace = face;
