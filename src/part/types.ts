@@ -334,12 +334,43 @@ export interface RotateFeature {
   suppressed?: boolean;
 }
 
-export type FeatureData = ExtrudeFeature | RevolveFeature | HoleFeature | EdgeFeature | PatternFeature | RotateFeature;
+/** One bend of a sheet: a straight line of its sketch (as drawn, sketch
+ *  coordinates), which side of it folds (+1 = left of start->end in the
+ *  plane, -1 = right), Up / Down (toward / away from the sketch's front)
+ *  and the angle (degrees expression). */
+export interface SheetBendData {
+  line: [Point, Point];
+  side: 1 | -1;
+  dir: "up" | "down";
+  angle: string;
+}
+
+/** Simple sheet metal: the sketch is the flat blank, folded along bend lines
+ *  (see part/sheetMetal.ts). */
+export interface SheetFeature {
+  id: string;
+  type: "sheet";
+  sketch: string;
+  /** Always "all": the sketch's closed shapes (bend lines aside) are the blank. */
+  profiles: "all";
+  /** part/sheetMetal.ts SHEET_MATERIALS key. */
+  material: string;
+  /** mm expression. */
+  thickness: string;
+  /** Inner bend radius (mm expression); absent = the material's default. */
+  radius?: string;
+  bends: SheetBendData[];
+  /** Show the flat pattern instead of the folded part. */
+  flat?: boolean;
+  suppressed?: boolean;
+}
+
+export type FeatureData = ExtrudeFeature | RevolveFeature | HoleFeature | EdgeFeature | PatternFeature | RotateFeature | SheetFeature;
 
 /** Features built from a sketch's closed shapes. */
-export type SketchFeature = ExtrudeFeature | RevolveFeature;
+export type SketchFeature = ExtrudeFeature | RevolveFeature | SheetFeature;
 
-export const usesSketch = (f: FeatureData): f is SketchFeature => f.type === "extrude" || f.type === "revolve";
+export const usesSketch = (f: FeatureData): f is SketchFeature => f.type === "extrude" || f.type === "revolve" || f.type === "sheet";
 
 export const isEdgeFeature = (f: FeatureData): f is EdgeFeature => f.type === "fillet" || f.type === "chamfer";
 
@@ -488,6 +519,29 @@ function parseFeature(raw: unknown): FeatureData | null {
       const v = parseTopoRef(raw[k]);
       if (v !== null) f[k] = v;
     }
+    return f;
+  }
+  if (raw.type === "sheet" && typeof raw.sketch === "string") {
+    const str = (v: unknown, dflt: string): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : dflt);
+    const bends: SheetBendData[] = [];
+    for (const b of Array.isArray(raw.bends) ? raw.bends : []) {
+      if (!isObject(b)) continue;
+      const line = parseSegment(b.line);
+      if (line === null) continue;
+      bends.push({ line, side: b.side === -1 ? -1 : 1, dir: b.dir === "down" ? "down" : "up", angle: str(b.angle, "90") });
+    }
+    const f: SheetFeature = {
+      id: raw.id,
+      type: "sheet",
+      sketch: raw.sketch,
+      profiles: "all",
+      material: typeof raw.material === "string" ? raw.material : "crca",
+      thickness: str(raw.thickness, "1.5"),
+      bends,
+      suppressed: raw.suppressed === true,
+    };
+    if (raw.radius !== undefined) f.radius = str(raw.radius, "");
+    if (raw.flat === true) f.flat = true;
     return f;
   }
   if (raw.type === "rotate") {

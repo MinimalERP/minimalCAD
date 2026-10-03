@@ -102,7 +102,7 @@ const SKETCH_GROUPS: readonly (readonly string[])[] = [
 ];
 
 /** 3D-workspace actions (handled by the lazily-loaded model module). */
-export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "pattern" | "circpattern" | "mirror3d" | "fillet" | "chamfer" | "rotate3d" | "line3d" | "measure" | "measureangle" | "measuredist" | "measureedge" | "measureface" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
+export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "pattern" | "circpattern" | "mirror3d" | "fillet" | "chamfer" | "rotate3d" | "line3d" | "sheetmetal" | "measure" | "measureangle" | "measuredist" | "measureedge" | "measureface" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
 
 /** Drawing-tab actions (handled by the lazily-loaded drawing module). */
 export type DrawingToolAction = "sheet" | "baseview" | "projview" | "sectionview" | "moveview" | "editview" | "deleteview" | "print" | "fit";
@@ -206,6 +206,9 @@ export function buildToolbar(
     host.modelAction("line3d"),
   );
   addUtilityButton(model, "extrude", "Extrude (E) - push a closed shape out into a solid, or cut with it", () => host.modelAction("extrude"));
+  addUtilityButton(model, "sheetmetal", "Sheet Metal (SM) - fold a flat blank along its bend lines: material, thickness, Up / Down, angle", () =>
+    host.modelAction("sheetmetal"),
+  );
   addUtilityButton(model, "revolve", "Revolve (R) - spin a closed shape round an axis line", () => host.modelAction("revolve"));
   addUtilityButton(model, "hole", "Hole (H) - click a face, place centres, set Ø / depth / c'bore / c'sink", () =>
     host.modelAction("hole"),

@@ -27,11 +27,11 @@ import type { Entity } from "../entities/entity";
 import type { HoleFeature, PartData, PlaneRef } from "../part/types";
 import { DRAWING_SKETCH, emptyPart, isEdgeFeature, modelPlaneKind, nextId, parsePart, usesSketch } from "../part/types";
 import type { ModelPlaneRef } from "../part/types";
-import { rebuild, resolvePlane } from "../part/rebuild";
+import { rebuild, resolvePlane, sheetValues } from "../part/rebuild";
 import type { RebuildResult } from "../part/rebuild";
 import { projectBodiesWithSources } from "../part/project";
 import { modelEdgeRef, modelRefResolver } from "../part/sketchRefs";
-import { axisName } from "../part/plane";
+import { axisName, offsetFrame } from "../part/plane";
 import type { Frame } from "../part/plane";
 import { evalExpression } from "../part/params";
 import { entityPolylines } from "../part/profile";
@@ -45,6 +45,8 @@ import { EdgeBlendCommand } from "./commands/edgeBlendCommand";
 import { RotateCommand } from "./commands/rotateCommand";
 import { Line3dCommand } from "./commands/line3dCommand";
 import { MeasureCommand } from "./commands/measureCommand";
+import { SheetMetalCommand } from "./commands/sheetMetalCommand";
+import { sheetMaterial } from "../part/sheetMetal";
 import { WorkPlaneCommand, planeAxes } from "./commands/workPlaneCommand";
 
 export interface ModelHost {
@@ -176,7 +178,8 @@ export class ModelController {
   /** The 2D drawing is always shown on the XY ground (it IS the model
    *  space); other sketches only until a feature consumes them. */
   private showWireframes(part: PartData, alsoShow: ReadonlySet<string> = new Set()): void {
-    const used = new Set(part.features.filter(usesSketch).map((f) => f.sketch));
+    // A sheet shown flat keeps its sketch visible: the bend lines on the blank.
+    const used = new Set(part.features.filter(usesSketch).filter((f) => !(f.type === "sheet" && f.flat === true)).map((f) => f.sketch));
     const list: { frame: Frame; polylines: Point[][] }[] = [];
     const drawing = this.result?.sketches.get(DRAWING_SKETCH);
     if (drawing !== undefined) {
@@ -187,6 +190,12 @@ export class ModelController {
       const geo = this.result?.sketches.get(s.id);
       if (geo === undefined) continue;
       list.push({ frame: geo.frame, polylines: entityPolylines(geo.entities) }); // as rebuilt: constraints applied
+      // A flat sheet: its bend lines (the whole sketch) on the blank's top face too.
+      for (const f of part.features) {
+        if (f.type !== "sheet" || f.flat !== true || f.sketch !== s.id) continue;
+        const v = sheetValues(f, this.params());
+        if (typeof v !== "string") list.push({ frame: offsetFrame(geo.frame, v.thickness), polylines: entityPolylines(geo.entities) });
+      }
     }
     this.view.setSketches(list);
   }
@@ -243,6 +252,8 @@ export class ModelController {
         return this.run(() => EdgeBlendCommand.start(this.ctx, action, null));
       case "rotate3d":
         return this.run(() => RotateCommand.start(this.ctx, null));
+      case "sheetmetal":
+        return this.run(() => SheetMetalCommand.start(this.ctx, null));
       case "measure":
         return this.run(() => MeasureCommand.start(this.ctx, MeasureCommand.lastMode));
       case "measureangle":
@@ -305,10 +316,11 @@ export class ModelController {
     else if (["l3", "l", "line", "3dline", "line3d"].includes(t)) this.action("line3d");
     else if (["mea", "measure", "ma", "ang", "angle"].includes(t)) this.action("measureangle");
     else if (["di", "dist", "distance"].includes(t)) this.action("measuredist");
+    else if (["sm", "sheet", "sheetmetal"].includes(t)) this.action("sheetmetal");
     else if (["ch", "cha", "chamfer"].includes(t)) this.action("chamfer");
     else if (["s", "sk", "sketch"].includes(t)) this.action("newsketch");
     else if (["wp", "plane", "workplane", "ucs"].includes(t)) this.action("workplane");
-    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), RO (rotate), L (3D line), MEA (measure), DI (distance), S (sketch), WP`);
+    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), RO (rotate), L (3D line), MEA (measure), DI (distance), SM (sheet metal), S (sketch), WP`);
   }
 
   escape(): void {
@@ -368,6 +380,7 @@ export class ModelController {
     else if (f.type === "revolve") this.run(() => RevolveCommand.start(this.ctx, f));
     else if (f.type === "pattern") this.run(() => PatternCommand.start(this.ctx, f.kind, f));
     else if (f.type === "rotate") this.run(() => RotateCommand.start(this.ctx, f));
+    else if (f.type === "sheet") this.run(() => SheetMetalCommand.start(this.ctx, f));
     else this.run(() => ExtrudeCommand.start(this.ctx, f));
   }
 
@@ -523,6 +536,13 @@ export class ModelController {
         continue;
       }
       sketchRow(f.sketch);
+      if (f.type === "sheet") {
+        const t = evalExpression(f.thickness, this.params());
+        const n = f.bends.length;
+        const mat = sheetMaterial(f.material).name.replace(/ \(.*\)/, "");
+        row(f.id, f.id, `${t === null ? f.thickness : +t.toFixed(3)} mm ${mat} · ${n} bend${n === 1 ? "" : "s"}${f.flat === true ? " · flat" : ""}`, "⌐", () => this.editFeature(f.id), { error });
+        continue;
+      }
       if (f.type === "revolve") {
         const deg = evalExpression(f.angle, this.params());
         const turn = f.extent !== "angle" ? "360°" : deg === null ? f.angle : `${+deg.toFixed(3)}°`;
