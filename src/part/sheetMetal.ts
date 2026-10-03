@@ -35,7 +35,7 @@ import { regionContains, regionFromSegments } from "./profile";
 import type { Transform } from "./pattern";
 import { rotation, transformBody, translation } from "./pattern";
 import type { Vec3 } from "./vec3";
-import { add, cross, dot, normalize, scale, sub } from "./vec3";
+import { add, cross, dot, normalize, scale } from "./vec3";
 
 export interface SheetMaterial {
   key: string;
@@ -202,20 +202,32 @@ export function sheetBody(spec: SheetSpec, regions: readonly Region[], frame: Fr
     // Zone: the cross-section (along the axis over the bend line, radially R..R+T) turned by the angle.
     const radial0 = up ? scale(frame.n, -1) : frame.n;
     const zf: Frame = { origin: axisPoint, u: k3, v: radial0, n: cross(k3, radial0) };
-    const s0 = dot(sub(to3(bend.a), axisPoint), k3);
-    const s1 = dot(sub(to3(bend.b), axisPoint), k3);
-    const lo = Math.min(s0, s1);
-    const hi = Math.max(s0, s1);
-    const rect = [
-      { x: lo, y: R },
-      { x: hi, y: R },
-      { x: hi, y: R + T },
-      { x: lo, y: R + T },
-    ];
-    const zoneRegion = regionFromSegments(rect.map((p, j) => ({ kind: "line" as const, a: p, b: rect[(j + 1) % 4]! })));
-    const zone = revolveRegions(`${id}~z${n}`, [zoneRegion], zf, { a: { x: 0, y: 0 }, b: { x: 1, y: 0 } }, 0, theta);
-    if (typeof zone === "string") return `Bend ${n}: ${zone}`;
-    zones.push({ body: zone, move: host.move, tag: `z${n}` });
+    // The zone follows the blank's own edges: built in angle slices, each as
+    // wide as the blank is across the strip at that slice's flat position
+    // (the neutral fibre maps linearly), so a slanted side gets a bend that
+    // ends on that slant -- no wedge missing, no overhang.
+    const d3 = normalize(add(scale(frame.u, d.x), scale(frame.v, d.y)));
+    const along = dot(d3, k3); // +1 / -1: sketch "along the line" -> axial
+    const drawn: [number, number] = [dot2(sub2(bend.a, mid), d), dot2(sub2(bend.b, mid), d)];
+    const slices = Math.max(4, Math.ceil(bend.angle / 7.5));
+    const parts: Body[] = [];
+    for (let j = 0; j < slices; j++) {
+      const x = -half + (ba * (j + 0.5)) / slices;
+      const [c0, c1] = chordAt(regions, at(x), d, drawn);
+      const lo = Math.min(c0 * along, c1 * along);
+      const hi = Math.max(c0 * along, c1 * along);
+      const rect = [
+        { x: lo, y: R },
+        { x: hi, y: R },
+        { x: hi, y: R + T },
+        { x: lo, y: R + T },
+      ];
+      const zoneRegion = regionFromSegments(rect.map((p, q) => ({ kind: "line" as const, a: p, b: rect[(q + 1) % 4]! })));
+      const slice = revolveRegions(`${id}~z${n}`, [zoneRegion], zf, { a: { x: 0, y: 0 }, b: { x: 1, y: 0 } }, (theta * j) / slices, (theta * (j + 1)) / slices);
+      if (typeof slice === "string") return `Bend ${n}: ${slice}`;
+      parts.push(slice);
+    }
+    zones.push({ body: joinAll(parts), move: host.move, tag: `z${n}` });
 
     const without = pieces.filter((p) => p !== host);
     pieces = [
@@ -231,6 +243,36 @@ export function sheetBody(spec: SheetSpec, regions: readonly Region[], frame: Fr
   ];
   const joined = joinAll(placed);
   return { ...joined, id, feature: id };
+}
+
+/**
+ * Where the line through `p` along unit `d` runs inside the blank: the
+ * stretch (as distances along d from p) around the bend line's own span
+ * `near`, clipped by the outline and any holes. Falls back to `near`.
+ */
+export function chordAt(regions: readonly Region[], p: Point, d: Point, near: [number, number]): [number, number] {
+  const hits: number[] = [];
+  for (const r of regions) {
+    for (const loop of [r.outer, ...r.holes]) {
+      const pts = loop.polygon;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i]!;
+        const b = pts[(i + 1) % pts.length]!;
+        const e = sub2(b, a);
+        const den = d.x * e.y - d.y * e.x;
+        if (Math.abs(den) < 1e-12) continue;
+        const w = sub2(a, p);
+        const t = (w.x * e.y - w.y * e.x) / den; // along d
+        const u = (w.x * d.y - w.y * d.x) / den; // along the edge
+        if (u >= 0 && u < 1) hits.push(t);
+      }
+    }
+  }
+  hits.sort((x, y) => x - y);
+  const centre = (near[0] + near[1]) / 2;
+  // Pairs of crossings bound the inside stretches; take the one holding the bend line's middle.
+  for (let i = 0; i + 1 < hits.length; i += 2) if (hits[i]! <= centre && centre <= hits[i + 1]!) return [hits[i]!, hits[i + 1]!];
+  return near;
 }
 
 /** Weight in kg of a body of `volume` mm^3. */

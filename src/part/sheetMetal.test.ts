@@ -6,7 +6,9 @@ import { meshVolume } from "./kernel/extrude";
 import { bodyBounds } from "./kernel/brep";
 import type { Body } from "./kernel/types";
 import { rebuild } from "./rebuild";
-import { bendAllowance, kFactor } from "./sheetMetal";
+import { bendAllowance, chordAt, kFactor } from "./sheetMetal";
+import { findProfiles } from "./profile";
+import { parseEntities } from "../core/document";
 import { emptyPart, parsePart } from "./types";
 import type { HoleFeature, PartData, SheetBendData, SheetFeature } from "./types";
 
@@ -104,6 +106,39 @@ describe("several bends", () => {
     expect(rebuild(sheetPart([outside]), []).status.get("Sheet001")?.error).toMatch(/isn't across the blank/);
     expect(rebuild(sheetPart([bendAt(99.5)]), []).status.get("Sheet001")?.error).toMatch(/too short/);
     expect(rebuild(sheetPart([bendAt(70, { angle: "200" })]), []).status.get("Sheet001")?.error).toMatch(/angle/);
+  });
+});
+
+describe("slanted blank edges", () => {
+  // The uploaded trapezoid (closed), bend lines across it between the slanted sides.
+  const trap = (extra: Entity[]): Record<string, unknown>[] =>
+    [L([188.5, -175], [452.5, -175]), L([452.5, -175], [641, 0]), L([641, 0], [0, 0]), L([0, 0], [188.5, -175]), ...extra].map((e) => e.serialize());
+  const xAt = (y: number, left: boolean): number => (left ? (188.5 * -y) / 175 : 641 - ((641 - 452.5) * -y) / 175);
+  const bend = (y: number, side: 1 | -1): SheetBendData => ({ line: [{ x: xAt(y, true), y }, { x: xAt(y, false), y }], side, dir: "up", angle: "90" });
+
+  it("the bend is as wide as the blank at each point across it (follows the slant)", () => {
+    const regions = findProfiles(parseEntities(trap([])).entities).regions;
+    expect(regions).toHaveLength(1);
+    // Plane-local (y up): a line along +x at local y = 30 + x0; the trapezoid is 641 wide at y=0, 264 at y=175.
+    for (const y of [27, 30, 33]) {
+      const [lo, hi] = chordAt(regions, { x: 300, y }, { x: 1, y: 0 }, [-100, 100]);
+      const width = 641 - ((641 - 264) * y) / 175;
+      expect(hi - lo).toBeCloseTo(width, 6);
+      expect(300 + lo).toBeCloseTo((188.5 * y) / 175, 6);
+    }
+  });
+
+  it("a slanted-side part folds into one solid, volume kept with K = 0.5", () => {
+    const bends = [bend(-30, 1), bend(-145, -1)];
+    const ents = trap(bends.map((b) => L([b.line[0].x, b.line[0].y], [b.line[1].x, b.line[1].y])));
+    // R = 5T -> DIN 6935 K = 0.5: the neutral fibre is mid-thickness, so the folded part keeps the flat volume.
+    const part = sheetPart(bends, { thickness: "2", radius: "10" }, ents);
+    const r = rebuild(part, []);
+    expect(r.status.get("Sheet001")).toEqual({ ok: true });
+    expect(r.bodies).toHaveLength(1);
+    const flatArea = ((264 + 641) / 2) * 175;
+    // Slices step the slanted ends a little: within 0.3 %.
+    expect(Math.abs(vol(r.bodies[0]!) - flatArea * 2) / (flatArea * 2)).toBeLessThan(3e-3);
   });
 });
 
