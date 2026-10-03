@@ -368,7 +368,7 @@ export class ModelController {
       return;
     }
     const user = part.features.find(
-      (f) => (f.type === "pattern" && (f.features.includes(id) || f.plane === id)) || (f.type === "rotate" && f.bodies?.includes(id) === true),
+      (f) => (f.type === "pattern" && (f.features.includes(id) || f.plane === id)) || (f.type === "rotate" && (f.bodies?.includes(id) === true || f.pieces?.some((x) => x.feature === id) === true)),
     );
     if (user !== undefined) {
       showToast(`${id} is used by ${user.id} - delete that first.`);
@@ -502,7 +502,8 @@ export class ModelController {
       if (f.type === "rotate") {
         const deg = evalExpression(f.angle, this.params());
         const about = f.axisEdge !== undefined ? "an edge" : f.axisFace !== undefined ? `face of ${f.axisFace.feature}` : (f.axis ?? "Z");
-        const what = f.bodies === undefined ? "all bodies" : f.bodies.join(", ");
+        const n = f.pieces?.length ?? 0;
+        const what = f.pieces !== undefined ? `${n} solid${n === 1 ? "" : "s"}` : f.bodies === undefined ? "all bodies" : f.bodies.join(", ");
         row(f.id, f.id, `${what} ${deg === null ? f.angle : +deg.toFixed(3)}° about ${about}`, "⟳", () => this.editFeature(f.id), { error });
         continue;
       }

@@ -72,7 +72,7 @@ export interface PlaneDisplay {
 export type Hit =
   | { kind: "plane"; key: string }
   /** A flat face of a solid (sketch-on-face). */
-  | { kind: "face"; ref: TopoRef; body: Body; faceId: number }
+  | { kind: "face"; ref: TopoRef; body: Body; faceId: number; /** Where it was clicked (edge-pick mode). */ at?: Vec3 }
   | { kind: "region"; region: PickableRegion }
   /** A point on the active face (plane-local coords), possibly osnapped. */
   | { kind: "facePoint"; point: Point; snap: string | null }
@@ -908,7 +908,7 @@ export class ModelView {
       const body = h?.object.userData.body as Body | undefined;
       const faceId = h?.faceIndex == null || body === undefined ? undefined : body.mesh.faceIds[h.faceIndex];
       const face = faceId === undefined ? undefined : body!.faces[faceId];
-      return face === undefined ? null : { kind: "face", ref: face.ref, body: body!, faceId: face.id };
+      return face === undefined || h === undefined ? null : { kind: "face", ref: face.ref, body: body!, faceId: face.id, at: { x: h.point.x, y: h.point.y, z: h.point.z } };
     }
     if (this.pickMode === "surfacePoint") {
       // A work plane in front of the solid there can be clicked too (a hole on a plane).
