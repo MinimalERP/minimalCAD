@@ -309,7 +309,28 @@ export interface PatternFeature {
   suppressed?: boolean;
 }
 
-export type FeatureData = ExtrudeFeature | RevolveFeature | HoleFeature | EdgeFeature | PatternFeature;
+/** Turns solids about an axis (Inventor's Move Bodies, rotate only): an
+ *  origin axis (X / Y / Z through the origin), a straight edge of the model,
+ *  or a round face's own axis. See part/rotateBody.ts. */
+export interface RotateFeature {
+  id: string;
+  type: "rotate";
+  /** Features whose bodies turn (a body belongs to the feature that made
+   *  it); absent = every body. */
+  bodies?: string[];
+  /** Origin axis (used when neither axisEdge nor axisFace is set). */
+  axis?: PatternAxis;
+  /** A straight model edge: found again by its two faces (EdgeRef, so it
+   *  follows the model), with its ends as picked as the fallback. */
+  axisEdge?: EdgeRef & { a: XYZ; b: XYZ };
+  /** A round face's axis. */
+  axisFace?: TopoRef;
+  /** Expression, degrees (right-handed about the axis). */
+  angle: string;
+  suppressed?: boolean;
+}
+
+export type FeatureData = ExtrudeFeature | RevolveFeature | HoleFeature | EdgeFeature | PatternFeature | RotateFeature;
 
 /** Features built from a sketch's closed shapes. */
 export type SketchFeature = ExtrudeFeature | RevolveFeature;
@@ -462,6 +483,27 @@ function parseFeature(raw: unknown): FeatureData | null {
     for (const k of ["axisFace", "planeFace"] as const) {
       const v = parseTopoRef(raw[k]);
       if (v !== null) f[k] = v;
+    }
+    return f;
+  }
+  if (raw.type === "rotate") {
+    const f: RotateFeature = {
+      id: raw.id,
+      type: "rotate",
+      angle: typeof raw.angle === "string" ? raw.angle : typeof raw.angle === "number" ? String(raw.angle) : "90",
+      suppressed: raw.suppressed === true,
+    };
+    if (Array.isArray(raw.bodies)) f.bodies = raw.bodies.filter((x): x is string => typeof x === "string");
+    if (raw.axis === "X" || raw.axis === "Y" || raw.axis === "Z") f.axis = raw.axis;
+    const face = parseTopoRef(raw.axisFace);
+    if (face !== null) f.axisFace = face;
+    if (isObject(raw.axisEdge)) {
+      const ref = parseEdgeRef(raw.axisEdge);
+      const xyz = (v: unknown): XYZ | null =>
+        isObject(v) && typeof v.x === "number" && typeof v.y === "number" && typeof v.z === "number" ? { x: v.x, y: v.y, z: v.z } : null;
+      const a = xyz(raw.axisEdge.a);
+      const b = xyz(raw.axisEdge.b);
+      if (ref !== null && a !== null && b !== null) f.axisEdge = { ...ref, a, b };
     }
     return f;
   }

@@ -39,6 +39,7 @@ import type { Vec3 } from "./vec3";
 import { isEdgeFeature } from "./types";
 import { edgeTools } from "./edgeBlend";
 import { holeTools } from "./hole";
+import { applyRotate } from "./rotateBody";
 import { DRAWING_SKETCH, FACE_PLANE, isBasePlane } from "./types";
 
 export interface FeatureStatus {
@@ -489,6 +490,10 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
         }
         status.set(feature.id, applied ? { ok: true } : { ok: false, error: "None of the copies touch the solid" });
       }
+      continue;
+    }
+    if (feature.type === "rotate") {
+      status.set(feature.id, applyRotate(feature, bodies, made, params));
       continue;
     }
     if (feature.type === "hole") {
