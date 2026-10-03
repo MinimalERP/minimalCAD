@@ -71,3 +71,32 @@ describe("3D Line", () => {
     }
   });
 });
+
+describe("sketches on the XY plane", () => {
+  it("each is its own sketch, separate from the 2D drawing", () => {
+    const sq = (x0: number, x1: number): Record<string, unknown>[] =>
+      [
+        new Line({ x: x0, y: 0 }, { x: x1, y: 0 }),
+        new Line({ x: x1, y: 0 }, { x: x1, y: -10 }),
+        new Line({ x: x1, y: -10 }, { x: x0, y: -10 }),
+        new Line({ x: x0, y: -10 }, { x: x0, y: 0 }),
+      ].map((e) => e.serialize());
+    const part: PartData = {
+      ...emptyPart(),
+      sketches: [
+        { id: "Sketch001", plane: { base: "XY", offset: 0 }, entities: sq(0, 10), constraints: [] },
+        { id: "Sketch002", plane: { base: "XY", offset: 0 }, entities: sq(20, 30), constraints: [] },
+      ],
+      features: [{ id: "E2", type: "extrude", sketch: "Sketch002", profiles: "all", distance: "5", direction: "normal", operation: "new" }],
+    };
+    const r = rebuild(part, sq(40, 50));
+    expect(r.sketches.get("Sketch001")!.profiles.regions).toHaveLength(1);
+    expect(r.sketches.get("Sketch002")!.profiles.regions).toHaveLength(1);
+    expect(r.sketches.get("Drawing")!.profiles.regions).toHaveLength(1);
+    expect(r.status.get("E2")).toEqual({ ok: true });
+    // Only Sketch002's square was extruded.
+    const xs = Array.from(r.bodies[0]!.mesh.positions).filter((_, i) => i % 3 === 0);
+    expect(Math.min(...xs)).toBeCloseTo(20);
+    expect(Math.max(...xs)).toBeCloseTo(30);
+  });
+});

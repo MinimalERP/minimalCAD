@@ -196,7 +196,7 @@ export function buildToolbar(
 
   // --- 3D model ---
   const model = group(root, "ws-group");
-  addUtilityButton(model, "newsketch", "New Sketch - pick a plane (XY = the 2D drawing)", () =>
+  addUtilityButton(model, "newsketch", "New Sketch - pick a plane or a flat face (each one is a new sketch)", () =>
     host.modelAction("newsketch"),
   );
   addUtilityButton(model, "workplane", "Work Plane - offset / rotate a plane, like a saved UCS (WP)", () =>

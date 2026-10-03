@@ -336,16 +336,12 @@ export class ModelController {
     this.pickingSketchPlane = true;
     this.view.setOriginPlanesVisible(true);
     this.view.setPickMode("plane");
-    this.host.commandBar.setStatus("NEW SKETCH", "Click a plane or a flat face of the solid (XY = the 2D drawing)");
+    this.host.commandBar.setStatus("NEW SKETCH", "Click a plane or a flat face of the solid - each New Sketch is a new sketch");
   }
 
   private pickSketchPlane(key: string): void {
     this.cancel();
-    if (key === "XY") {
-      // The XY plane is the 2D drawing itself.
-      this.host.enterDrawing();
-      return;
-    }
+    // Every New Sketch is its own sketch -- XY too (the 2D drawing is opened from its own tree row).
     this.host.enterSketch(nextId(this.part(), "Sketch"), { base: key, offset: 0 });
   }
 
