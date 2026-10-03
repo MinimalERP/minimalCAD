@@ -801,6 +801,22 @@ function drawDeleteView(ctx: CanvasRenderingContext2D): void {
   line(ctx, 19, 11, 12, 18);
 }
 
+function drawSheetMetal(ctx: CanvasRenderingContext2D): void {
+  // a plate with one flange folded up, the bend rounded
+  facet(ctx, [[2, 17], [11, 17], [15, 13], [6, 13]], SOLID_TOP);
+  facet(ctx, [[11, 17], [15, 13], [15, 3], [11, 7]], ACCENT);
+  ctx.save();
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(2, 17);
+  ctx.lineTo(10, 17);
+  ctx.quadraticCurveTo(11, 17, 11, 16);
+  ctx.lineTo(11, 7);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawMeasure3d(ctx: CanvasRenderingContext2D): void {
   // a protractor arc between two faces, with a ruler along the bottom
   ctx.save();
@@ -876,6 +892,7 @@ const DRAWERS: Record<string, Drawer> = {
   rotate3d: drawRotate3d,
   line3d: drawLine3d,
   measure3d: drawMeasure3d,
+  sheetmetal: drawSheetMetal,
   fillet3d: drawFillet3d,
   chamfer3d: drawChamfer3d,
   viewfront: viewCube("front"),

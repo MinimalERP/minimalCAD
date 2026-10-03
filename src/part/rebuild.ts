@@ -33,6 +33,7 @@ import { faceFrame, offsetFrame, planeFrame, toLocal, workPlaneFrame } from "./p
 import type { Frame } from "./plane";
 import { findProfiles, regionContains } from "./profile";
 import type { ProfileResult, Region } from "./profile";
+import type { SheetFeature } from "./types";
 import type { EdgeFeature, ExtrudeFeature, HoleFeature, PartData, PlaneRef, RevolveAxis, RevolveFeature, SketchData, WorkPlane } from "./types";
 import { modelPlane } from "./workPlane";
 import type { Vec3 } from "./vec3";
@@ -40,6 +41,8 @@ import { isEdgeFeature } from "./types";
 import { edgeTools } from "./edgeBlend";
 import { holeTools } from "./hole";
 import { applyRotate } from "./rotateBody";
+import { kFactor, onSegment, sheetBody, sheetMaterial } from "./sheetMetal";
+import type { SheetBend } from "./sheetMetal";
 import { DRAWING_SKETCH, FACE_PLANE, isBasePlane } from "./types";
 
 export interface FeatureStatus {
@@ -431,6 +434,48 @@ function applyEdgeFeature(feature: EdgeFeature, bodies: Body[], params: Readonly
   return { ok: true };
 }
 
+export interface SheetValues {
+  thickness: number;
+  radius: number;
+  k: number;
+  density: number;
+}
+
+/** A sheet's material values (thickness, inner radius, K-factor), or why they're invalid. */
+export function sheetValues(f: Pick<SheetFeature, "material" | "thickness" | "radius">, params: ReadonlyMap<string, number>): SheetValues | string {
+  const mat = sheetMaterial(f.material);
+  const t = evalExpression(f.thickness, params);
+  if (t === null || !(t > 0)) return `Invalid thickness "${f.thickness}"`;
+  const r = f.radius === undefined || f.radius.trim() === "" ? t * mat.radiusFactor : evalExpression(f.radius, params);
+  if (r === null || r < 0) return `Invalid bend radius "${f.radius ?? ""}"`;
+  return { thickness: t, radius: r, k: kFactor(r, t), density: mat.density };
+}
+
+/**
+ * A sheet feature's part from its sketch: the blank is every closed shape
+ * once the bend lines are set aside; each bend line is found again like a
+ * Revolve axis (so it follows 2D edits).
+ */
+export function sheetFeatureBody(f: SheetFeature, geo: SketchGeometry, params: ReadonlyMap<string, number>): { body: Body; values: SheetValues } | string {
+  const values = sheetValues(f, params);
+  if (typeof values === "string") return values;
+  const bends: SheetBend[] = [];
+  for (const [i, b] of f.bends.entries()) {
+    const line = resolveRevolveAxis({ kind: "line", a: b.line[0], b: b.line[1] }, geo.lines);
+    const angle = evalExpression(b.angle, params);
+    if (angle === null) return `Bend ${i + 1}: invalid angle "${b.angle}"`;
+    bends.push({ a: line.a, b: line.b, side: b.side, dir: b.dir, angle });
+  }
+  // The blank: the sketch's shapes without its bend lines (a line across splits a shape in two).
+  const size = Math.max(1, ...geo.lines.flat().map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))));
+  const tol = size * 1e-6;
+  const isBendLine = (e: Entity): boolean =>
+    e instanceof Line && bends.some((b) => onSegment(toLocal(e.startPoint), b.a, b.b, tol) && onSegment(toLocal(e.endPoint), b.a, b.b, tol));
+  const regions = findProfiles(geo.entities.filter((e) => !isBendLine(e))).regions;
+  const body = sheetBody({ id: f.id, thickness: values.thickness, radius: values.radius, k: values.k, flat: f.flat === true }, regions, geo.frame, bends);
+  return typeof body === "string" ? body : { body, values };
+}
+
 export function rebuild(part: PartData, drawingEntities: Record<string, unknown>[] = []): RebuildResult {
   const params = resolveParameters(part.parameters);
   const planes = resolveWorkPlanes(part, params);
@@ -507,6 +552,11 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
     const geo = resolveSketch(feature.sketch);
     if (geo === undefined) {
       status.set(feature.id, { ok: false, error: `Sketch ${feature.sketch} is missing or its plane is broken` });
+      continue;
+    }
+    if (feature.type === "sheet") {
+      const tool = sheetFeatureBody(feature, geo, params);
+      status.set(feature.id, use(feature.id, typeof tool === "string" ? tool : tool.body, "new"));
       continue;
     }
     const regions = selectRegions(geo.profiles.regions, feature.profiles);

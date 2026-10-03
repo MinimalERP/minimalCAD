@@ -1393,3 +1393,36 @@ body[data-workspace="drawing"] #gl-canvas[hidden] ~ .feature-dialog {
 .feature-dialog .measure-hint {
   color: #a8a8a8;
 }
+
+/* --- Sheet Metal dialog: one row per bend --- */
+.feature-dialog .sheet-bends {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 6px;
+}
+.feature-dialog .sheet-bend-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.feature-dialog .sheet-bend-row > span:first-child {
+  flex: 0 0 50px;
+  color: #a8a8a8;
+}
+.feature-dialog .sheet-bend-row .fd-small-btn.active {
+  background: #0e639c;
+  color: #ffffff;
+}
+.feature-dialog .sheet-angle {
+  width: 44px;
+  padding: 2px 4px;
+  color: #d4d4d4;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  font: inherit;
+}
+.feature-dialog .sheet-info {
+  margin: 4px 0;
+  color: #ffd400;
+}

@@ -289,15 +289,31 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
     }
     merged.set(to, list);
   }
-  const newIndex = new Map<number, number>();
-  const outFaces: Face[] = [];
+  // A plane face's stored normal may be a cut tool's (pointing into the
+  // result): re-derive it from the output polygons -- the face's LARGEST one,
+  // since a boolean can leave hair-thin slivers along a seam whose own
+  // normal is unreliable.
+  const largest = new Map<number, { p: (typeof polys)[number]; area: number }>();
   for (const p of polys) {
     const src = canonical.get(p.faceId)!;
+    let n = { x: 0, y: 0, z: 0 };
+    for (let k = 0; k < p.idx.length; k++) {
+      const a = pts[p.idx[k]!]!;
+      const b = pts[p.idx[(k + 1) % p.idx.length]!]!;
+      n = { x: n.x + (a.y - b.y) * (a.z + b.z), y: n.y + (a.z - b.z) * (a.x + b.x), z: n.z + (a.x - b.x) * (a.y + b.y) };
+    }
+    const area = Math.hypot(n.x, n.y, n.z);
+    const best = largest.get(src);
+    if (best === undefined || area > best.area) largest.set(src, { p, area });
+  }
+  const newIndex = new Map<number, number>();
+  const outFaces: Face[] = [];
+  for (const p0 of polys) {
+    const src = canonical.get(p0.faceId)!;
     if (newIndex.has(src)) continue;
     newIndex.set(src, outFaces.length);
     const f = faces[src]!;
-    // A plane face's stored normal may be a cut tool's (pointing into the
-    // result): re-derive it from the actual output polygon.
+    const p = largest.get(src)!.p;
     const geom: Face["geom"] =
       f.geom.kind === "plane" ? { kind: "plane", origin: pts[p.idx[0]!]!, normal: p.normal } : f.geom;
     const face: Face = { id: outFaces.length, ref: f.ref, geom };
