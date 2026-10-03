@@ -102,7 +102,7 @@ const SKETCH_GROUPS: readonly (readonly string[])[] = [
 ];
 
 /** 3D-workspace actions (handled by the lazily-loaded model module). */
-export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "pattern" | "circpattern" | "mirror3d" | "fillet" | "chamfer" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
+export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "pattern" | "circpattern" | "mirror3d" | "fillet" | "chamfer" | "rotate3d" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
 
 /** Drawing-tab actions (handled by the lazily-loaded drawing module). */
 export type DrawingToolAction = "sheet" | "baseview" | "projview" | "sectionview" | "moveview" | "editview" | "deleteview" | "print" | "fit";
@@ -216,6 +216,9 @@ export function buildToolbar(
   addUtilityButton(model, "pattern", "Rectangular Pattern (PAT) - repeat features in rows and columns", () => host.modelAction("pattern"));
   addUtilityButton(model, "circpattern", "Circular Pattern (CPAT) - repeat features round an axis", () => host.modelAction("circpattern"));
   addUtilityButton(model, "mirror3d", "Mirror (MIR) - copy features across a plane", () => host.modelAction("mirror3d"));
+  addUtilityButton(model, "rotate3d", "Rotate Body (RO) - turn solids about X / Y / Z, an edge, or a round face's axis", () =>
+    host.modelAction("rotate3d"),
+  );
   model.appendChild(gap());
   addUtilityButton(model, "viewfront", "Front view", () => host.modelAction("viewfront"));
   addUtilityButton(model, "viewtop", "Top view", () => host.modelAction("viewtop"));

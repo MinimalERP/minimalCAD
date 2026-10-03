@@ -42,6 +42,7 @@ import { RevolveCommand } from "./commands/revolveCommand";
 import { PatternCommand } from "./commands/patternCommand";
 import { HoleCommand } from "./commands/holeCommand";
 import { EdgeBlendCommand } from "./commands/edgeBlendCommand";
+import { RotateCommand } from "./commands/rotateCommand";
 import { WorkPlaneCommand, planeAxes } from "./commands/workPlaneCommand";
 
 export interface ModelHost {
@@ -237,6 +238,8 @@ export class ModelController {
       case "fillet":
       case "chamfer":
         return this.run(() => EdgeBlendCommand.start(this.ctx, action, null));
+      case "rotate3d":
+        return this.run(() => RotateCommand.start(this.ctx, null));
       case "viewfront":
         return this.view.setView("front");
       case "viewtop":
@@ -282,10 +285,11 @@ export class ModelController {
     else if (["cpat", "circular"].includes(t)) this.action("circpattern");
     else if (["mir", "mirror"].includes(t)) this.action("mirror3d");
     else if (["f", "fillet"].includes(t)) this.action("fillet");
+    else if (["ro", "rot", "rotate"].includes(t)) this.action("rotate3d");
     else if (["ch", "cha", "chamfer"].includes(t)) this.action("chamfer");
     else if (["s", "sk", "sketch"].includes(t)) this.action("newsketch");
     else if (["wp", "plane", "workplane", "ucs"].includes(t)) this.action("workplane");
-    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), S (sketch), WP`);
+    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), RO (rotate), S (sketch), WP`);
   }
 
   escape(): void {
@@ -348,6 +352,7 @@ export class ModelController {
     else if (isEdgeFeature(f)) this.run(() => EdgeBlendCommand.start(this.ctx, f.type, f));
     else if (f.type === "revolve") this.run(() => RevolveCommand.start(this.ctx, f));
     else if (f.type === "pattern") this.run(() => PatternCommand.start(this.ctx, f.kind, f));
+    else if (f.type === "rotate") this.run(() => RotateCommand.start(this.ctx, f));
     else this.run(() => ExtrudeCommand.start(this.ctx, f));
   }
 
@@ -362,7 +367,9 @@ export class ModelController {
       showToast(`${id} has sketches on it - delete them first.`);
       return;
     }
-    const user = part.features.find((f) => f.type === "pattern" && (f.features.includes(id) || f.plane === id));
+    const user = part.features.find(
+      (f) => (f.type === "pattern" && (f.features.includes(id) || f.plane === id)) || (f.type === "rotate" && f.bodies?.includes(id) === true),
+    );
     if (user !== undefined) {
       showToast(`${id} is used by ${user.id} - delete that first.`);
       return;
@@ -490,6 +497,13 @@ export class ModelController {
               ? `×${n(f.count1)} over ${n(f.angle ?? "360")}° about ${f.axisFace !== undefined ? `face of ${f.axisFace.feature}` : (f.dir1 ?? "Z")}`
               : `${n(f.count1)} × ${n(f.spacing1)} mm along ${f.dir1 ?? "X"}${f.dir2 !== undefined ? `, ${n(f.count2)} × ${n(f.spacing2)} mm along ${f.dir2}` : ""}`;
         row(f.id, f.id, `${f.features.join(", ")} ${what}`, f.kind === "mirror" ? "⇋" : f.kind === "circular" ? "❋" : "▦", () => this.editFeature(f.id), { error });
+        continue;
+      }
+      if (f.type === "rotate") {
+        const deg = evalExpression(f.angle, this.params());
+        const about = f.axisEdge !== undefined ? "an edge" : f.axisFace !== undefined ? `face of ${f.axisFace.feature}` : (f.axis ?? "Z");
+        const what = f.bodies === undefined ? "all bodies" : f.bodies.join(", ");
+        row(f.id, f.id, `${what} ${deg === null ? f.angle : +deg.toFixed(3)}° about ${about}`, "⟳", () => this.editFeature(f.id), { error });
         continue;
       }
       sketchRow(f.sketch);

@@ -801,6 +801,25 @@ function drawDeleteView(ctx: CanvasRenderingContext2D): void {
   line(ctx, 19, 11, 12, 18);
 }
 
+function drawRotate3d(ctx: CanvasRenderingContext2D): void {
+  // a block with a turning arrow round it
+  block(ctx, 5, 8, 8, 7, 3);
+  ctx.save();
+  ctx.strokeStyle = ACCENT;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(10, 10, 8, Math.PI * 0.95, Math.PI * 1.9);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(18.6, 5.2);
+  ctx.lineTo(17.6, 9.4);
+  ctx.lineTo(14.2, 6.6);
+  ctx.closePath();
+  ctx.fillStyle = ACCENT;
+  ctx.fill();
+  ctx.restore();
+}
+
 const DRAWERS: Record<string, Drawer> = {
   sheet: drawSheet,
   baseview: drawBaseView,
@@ -818,6 +837,7 @@ const DRAWERS: Record<string, Drawer> = {
   pattern: drawPattern3d,
   circpattern: drawCircPattern,
   mirror3d: drawMirror3d,
+  rotate3d: drawRotate3d,
   fillet3d: drawFillet3d,
   chamfer3d: drawChamfer3d,
   viewfront: viewCube("front"),
