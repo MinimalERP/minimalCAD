@@ -773,11 +773,15 @@ export class ModelView {
 
   /** Edge picking (Fillet / Chamfer): the visible candidate edge nearest
    *  the cursor on screen; elsewhere, the face under it (any kind). */
-  setEdgePickMode(edges: readonly Vec3[][]): void {
+  setEdgePickMode(edges: readonly Vec3[][], opts: { xray?: boolean } = {}): void {
     this.setPickMode("none");
     this.pickMode = "edge";
     this.edgeCandidates = edges.map((e) => e.slice());
+    this.edgeXray = opts.xray === true;
   }
+
+  /** Edge mode: candidates are clickable even behind the solid (sketch lines under a part). */
+  private edgeXray = false;
 
   /** 3D Line: click points anywhere, osnapping to `candidates` (world points). */
   setPoint3dMode(candidates: readonly { p: Vec3; kind: string }[]): void {
@@ -853,6 +857,7 @@ export class ModelView {
       if (best <= SNAP_PX && at !== null) found.push({ i, d: best, at });
     });
     found.sort((p, q) => p.d - q.d);
+    if (this.edgeXray) return found[0]?.i ?? null;
     // Visible only: nothing of the model in front of the edge there.
     const size = this.pixelSize();
     for (const f of found) {

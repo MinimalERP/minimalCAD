@@ -19,7 +19,7 @@ import { meshVolume } from "../../part/kernel/extrude";
 import type { Vec3 } from "../../part/vec3";
 import type { Hit, PickableRegion } from "../modelView";
 import { FeatureDialog } from "../featureDialog";
-import type { SelectionHandle } from "../featureDialog";
+import type { ChoiceHandle, FieldHandle, SelectionHandle } from "../featureDialog";
 import type { ModelCommand, ModelContext } from "./context";
 import { showToast } from "../../ui/toast";
 
@@ -42,6 +42,9 @@ export class SheetMetalCommand implements ModelCommand {
   private bendList: HTMLDivElement;
   private info: HTMLDivElement;
   private flatToggle: { set(on: boolean): void };
+  private materialChoice: ChoiceHandle<string>;
+  private thicknessField: FieldHandle;
+  private radiusField: FieldHandle;
 
   static start(ctx: ModelContext, editing: SheetFeature | null): SheetMetalCommand | null {
     const r = ctx.result();
@@ -57,20 +60,13 @@ export class SheetMetalCommand implements ModelCommand {
     private ctx: ModelContext,
     private editing: SheetFeature | null,
   ) {
-    if (editing !== null) {
-      this.sketchId = editing.sketch;
-      this.material = editing.material;
-      this.thickness = editing.thickness;
-      this.radius = editing.radius ?? "";
-      this.bends = editing.bends.map((b) => ({ ...b, line: [{ ...b.line[0] }, { ...b.line[1] }] }));
-      this.flat = editing.flat === true;
-    }
+    if (editing !== null) this.load(editing);
     const d = (this.dialog = new FeatureDialog(ctx.dialogParent, editing === null ? "Sheet Metal" : `Edit ${editing.id}`, {
       onOk: () => this.ok(),
       onCancel: () => this.cancel(),
     }));
     this.sketchSel = d.selection("Blank", "", false, () => this.setStage("sketch"));
-    d.choice(
+    this.materialChoice = d.choice(
       "Material",
       SHEET_MATERIALS.map((m) => ({ value: m.key, label: m.key === "crca" ? "CRCA" : m.key === "gi" ? "GI" : m.key === "ss304" ? "SS304" : "Al", title: m.name })),
       this.material,
@@ -79,11 +75,11 @@ export class SheetMetalCommand implements ModelCommand {
         this.update();
       },
     );
-    d.number("Thickness", "mm", this.thickness, (t) => {
+    this.thicknessField = d.number("Thickness", "mm", this.thickness, (t) => {
       this.thickness = t;
       this.update();
     });
-    d.number("Inner radius", "mm", this.radius, (t) => {
+    this.radiusField = d.number("Inner radius", "mm", this.radius, (t) => {
       this.radius = t;
       this.update();
     });
@@ -99,6 +95,29 @@ export class SheetMetalCommand implements ModelCommand {
     ctx.view.setOriginPlanesVisible(false);
     ctx.view.onEdgeHover = (hit) => this.drawLines(hit?.kind === "edge" ? hit.index : null);
     this.setStage(this.sketchId === null ? "sketch" : "bends");
+  }
+
+  private load(f: SheetFeature): void {
+    this.sketchId = f.sketch;
+    this.material = f.material;
+    this.thickness = f.thickness;
+    this.radius = f.radius ?? "";
+    this.bends = f.bends.map((b) => ({ ...b, line: [{ ...b.line[0] }, { ...b.line[1] }] }));
+    this.flat = f.flat === true;
+  }
+
+  /** A blank that is already a sheet: edit that sheet (add its bends) rather than make a second part from it. */
+  private adopt(f: SheetFeature): void {
+    this.editing = f;
+    this.load(f);
+    this.flat = false; // here to bend it: show it folded
+    this.materialChoice.set(this.material);
+    this.thicknessField.set(this.thickness);
+    this.radiusField.set(this.radius);
+    this.flatToggle.set(this.flat);
+    const title = this.dialog.el.querySelector(".fd-title");
+    if (title !== null) title.textContent = `Edit ${f.id}`;
+    showToast(`${f.id} is already made from this blank - adding to it (new bends go on the same part).`);
   }
 
   private geo() {
@@ -120,7 +139,8 @@ export class SheetMetalCommand implements ModelCommand {
       const g = this.geo()!;
       this.lines = g.lines;
       this.ctx.showWireframes(new Set([g.sketch.id]));
-      view.setEdgePickMode(this.lines.map(([a, b]) => [localTo3d(g.frame, a), localTo3d(g.frame, b)]));
+      // X-ray: the bend lines lie on the blank, under the part once it's made.
+      view.setEdgePickMode(this.lines.map(([a, b]) => [localTo3d(g.frame, a), localTo3d(g.frame, b)]), { xray: true });
       this.ctx.status(NAME, "Click each bend line (a straight line across the blank) - set Up / Down, side and angle in the panel");
     }
     this.sketchSel.setActive(this.stage === "sketch");
@@ -131,8 +151,13 @@ export class SheetMetalCommand implements ModelCommand {
   onPick(hit: Hit): void {
     if (this.stage === "sketch") {
       if (hit.kind !== "region") return;
-      if (hit.region.sketchId !== this.sketchId) this.bends = [];
-      this.sketchId = hit.region.sketchId;
+      const id = hit.region.sketchId;
+      const existing = this.ctx.part().features.filter((f): f is SheetFeature => f.type === "sheet" && f.sketch === id && f.id !== this.editing?.id).pop();
+      if (existing !== undefined && this.editing === null) this.adopt(existing);
+      else {
+        if (id !== this.sketchId) this.bends = [];
+        this.sketchId = id;
+      }
       this.setStage("bends");
       return;
     }
