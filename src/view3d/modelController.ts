@@ -43,6 +43,7 @@ import { PatternCommand } from "./commands/patternCommand";
 import { HoleCommand } from "./commands/holeCommand";
 import { EdgeBlendCommand } from "./commands/edgeBlendCommand";
 import { RotateCommand } from "./commands/rotateCommand";
+import { Line3dCommand } from "./commands/line3dCommand";
 import { WorkPlaneCommand, planeAxes } from "./commands/workPlaneCommand";
 
 export interface ModelHost {
@@ -98,6 +99,7 @@ export class ModelController {
       showWireframes: (alsoShow) => this.showWireframes(this.part(), alsoShow),
       status: (command, text) => this.host.commandBar.setStatus(command, text),
       done: () => this.finishCommand(),
+      startCommand: (make) => this.run(make),
     };
     this.view.onPick = (hit) => {
       if (this.active !== null) {
@@ -240,6 +242,8 @@ export class ModelController {
         return this.run(() => EdgeBlendCommand.start(this.ctx, action, null));
       case "rotate3d":
         return this.run(() => RotateCommand.start(this.ctx, null));
+      case "line3d":
+        return this.run(() => new Line3dCommand(this.ctx));
       case "viewfront":
         return this.view.setView("front");
       case "viewtop":
@@ -270,6 +274,7 @@ export class ModelController {
   /** Typed text in the command bar while in 3D: command shortcuts only
    *  (3D options live in dialogs). */
   textInput(text: string): void {
+    if (this.active?.textInput?.(text) === true) return;
     const t = text.trim().toLowerCase();
     if (this.pickingSketchPlane) {
       const upper = t.toUpperCase();
@@ -286,10 +291,11 @@ export class ModelController {
     else if (["mir", "mirror"].includes(t)) this.action("mirror3d");
     else if (["f", "fillet"].includes(t)) this.action("fillet");
     else if (["ro", "rot", "rotate"].includes(t)) this.action("rotate3d");
+    else if (["l3", "l", "line", "3dline", "line3d"].includes(t)) this.action("line3d");
     else if (["ch", "cha", "chamfer"].includes(t)) this.action("chamfer");
     else if (["s", "sk", "sketch"].includes(t)) this.action("newsketch");
     else if (["wp", "plane", "workplane", "ucs"].includes(t)) this.action("workplane");
-    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), RO (rotate), S (sketch), WP`);
+    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), RO (rotate), L (3D line), S (sketch), WP`);
   }
 
   escape(): void {
@@ -315,10 +321,10 @@ export class ModelController {
     else if (e.key === "Enter") this.active?.ok();
     else if (e.key === "Delete") {
       if (this.selectedNode !== null && this.active === null) this.deleteNode(this.selectedNode);
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && this.active === null) {
+    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && (this.active === null || this.active.textInput !== undefined)) {
       // Same as 2D: typing a command shortcut goes to the command bar.
       this.host.commandBar.enableInput("text");
-      this.host.commandBar.setValue(e.key);
+      this.host.commandBar.insertChar(e.key); // marks the field as typed, so the next key appends
       e.preventDefault();
     }
   }
@@ -330,16 +336,12 @@ export class ModelController {
     this.pickingSketchPlane = true;
     this.view.setOriginPlanesVisible(true);
     this.view.setPickMode("plane");
-    this.host.commandBar.setStatus("NEW SKETCH", "Click a plane or a flat face of the solid (XY = the 2D drawing)");
+    this.host.commandBar.setStatus("NEW SKETCH", "Click a plane or a flat face of the solid - each New Sketch is a new sketch");
   }
 
   private pickSketchPlane(key: string): void {
     this.cancel();
-    if (key === "XY") {
-      // The XY plane is the 2D drawing itself.
-      this.host.enterDrawing();
-      return;
-    }
+    // Every New Sketch is its own sketch -- XY too (the 2D drawing is opened from its own tree row).
     this.host.enterSketch(nextId(this.part(), "Sketch"), { base: key, offset: 0 });
   }
 

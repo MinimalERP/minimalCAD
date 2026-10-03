@@ -82,7 +82,10 @@ export type Hit =
   | { kind: "surfacePoint"; ref: TopoRef; body: Body; faceId: number; frame: Surface; point: Point; raw: Point; snap: string | null }
   /** Edge picking (Fillet / Chamfer): candidate edge `index` (visible, near
    *  the cursor on screen). */
-  | { kind: "edge"; index: number };
+  | { kind: "edge"; index: number }
+  /** 3D Line: the cursor ray, the osnap point under it (if any), and where
+   *  the ray first meets the solid (if it does). */
+  | { kind: "point3d"; ray: { o: Vec3; d: Vec3 }; snap: { p: Vec3; kind: string } | null; at: Vec3 | null };
 
 /** An osnap candidate on the active face, in its plane-local coords. */
 export interface SnapCandidate {
@@ -202,7 +205,9 @@ export class ModelView {
   private faceHighlight = new THREE.Group();
   private highlightedFaceKey: string | null = null;
 
-  private pickMode: "none" | "plane" | "region" | "facePoint" | "surfacePoint" | "edge" = "none";
+  private pickMode: "none" | "plane" | "region" | "facePoint" | "surfacePoint" | "edge" | "point3d" = "none";
+  /** point3d mode: osnap candidates (world points). */
+  private snap3d: { p: Vec3; kind: string }[] = [];
   /** Edge-pick candidates (world polylines). */
   private edgeCandidates: Vec3[][] = [];
   private edgeGroup = new THREE.Group();
@@ -738,6 +743,29 @@ export class ModelView {
     this.edgeCandidates = edges.map((e) => e.slice());
   }
 
+  /** 3D Line: click points anywhere, osnapping to `candidates` (world points). */
+  setPoint3dMode(candidates: readonly { p: Vec3; kind: string }[]): void {
+    this.setPickMode("none");
+    this.pickMode = "point3d";
+    this.snap3d = candidates.slice();
+  }
+
+  /** New osnap candidates without leaving point3d mode (keeps the preview). */
+  setPoint3dCandidates(candidates: readonly { p: Vec3; kind: string }[]): void {
+    this.snap3d = candidates.slice();
+  }
+
+  /** 3D Line preview: the chain so far (blue), the rubber band (yellow),
+   *  and the cursor marker (yellow box = osnap, white cross = free). */
+  setChainPreview(chain: readonly Vec3[], rubber: readonly [Vec3, Vec3] | null, cursor: { p: Vec3; snapped: boolean } | null): void {
+    const segs = (pts: readonly Vec3[]): Vec3[][] => pts.slice(1).map((p, i) => [pts[i]!, p]);
+    this.setEdgeHighlights(segs(chain), rubber === null ? [] : [rubber.slice()]);
+    disposeChildren(this.markerGroup);
+    for (const p of chain) this.markerGroup.add(markerSprite(v3(p), "#4fc3ff", "box"));
+    if (cursor !== null) this.markerGroup.add(markerSprite(v3(cursor.p), cursor.snapped ? "#ffd400" : "#ffffff", cursor.snapped ? "box" : "x"));
+    this.requestRender();
+  }
+
   /** Picked edges (blue) and hovered ones (yellow), drawn over the model. */
   setEdgeHighlights(selected: readonly (readonly Vec3[])[], hover: readonly (readonly Vec3[])[]): void {
     disposeChildren(this.edgeGroup);
@@ -837,6 +865,7 @@ export class ModelView {
     this.edgeCandidates = [];
     disposeChildren(this.edgeGroup);
     this.snapCandidates = [];
+    this.snap3d = [];
     disposeChildren(this.markerGroup);
     this.pickMode = mode;
     this.hovered = null;
@@ -900,6 +929,33 @@ export class ModelView {
       const hit = ray.origin.clone().addScaledVector(ray.direction, t);
       const d = sub({ x: hit.x, y: hit.y, z: hit.z }, frame.origin);
       return { kind: "facePoint", point: { x: dot(d, frame.u), y: dot(d, frame.v) }, snap: null };
+    }
+    if (this.pickMode === "point3d") {
+      const ray = this.raycaster.ray;
+      const first = this.raycaster.intersectObjects(this.bodyMeshes, false)[0];
+      const at = first === undefined ? null : { x: first.point.x, y: first.point.y, z: first.point.z };
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const size = this.pixelSize();
+      let best: { p: Vec3; kind: string; d: number } | null = null;
+      for (const c of this.snap3d) {
+        const w = v3(c.p);
+        const s = w.clone().project(this.camera);
+        const d = Math.hypot(((s.x + 1) / 2) * rect.width - mx, ((1 - s.y) / 2) * rect.height - my);
+        if (d > SNAP_PX || (best !== null && d >= best.d)) continue;
+        // Visible only: nothing of the model in front of it.
+        this.raycaster.setFromCamera(new THREE.Vector2(s.x, s.y), this.camera);
+        const hit = this.raycaster.intersectObjects(this.bodyMeshes, false)[0];
+        const dist = this.raycaster.ray.origin.distanceTo(w);
+        if (hit === undefined || hit.distance >= dist - size * 3) best = { ...c, d };
+      }
+      this.raycaster.setFromCamera(ndc, this.camera);
+      return {
+        kind: "point3d",
+        ray: { o: { x: ray.origin.x, y: ray.origin.y, z: ray.origin.z }, d: { x: ray.direction.x, y: ray.direction.y, z: ray.direction.z } },
+        snap: best === null ? null : { p: best.p, kind: best.kind },
+        at,
+      };
     }
     if (this.pickMode === "edge") {
       const edge = this.pickEdge(e, rect);
@@ -1001,6 +1057,9 @@ export class ModelView {
     return snaps;
   }
 
+  /** Live hover feedback in point3d mode (3D Line). */
+  onPoint3dHover: ((hit: Extract<Hit, { kind: "point3d" }> | null) => void) | null = null;
+
   /** Live hover feedback in face-point mode (the controller draws markers). */
   onFacePointHover: ((hit: { point: Point; snap: string | null } | null) => void) | null = null;
   /** Live hover feedback in surface-point mode (null = not over a flat face). */
@@ -1008,6 +1067,12 @@ export class ModelView {
 
   private onHover(e: PointerEvent): void {
     if (this.pickMode === "none" || this.downPos !== null) return;
+    if (this.pickMode === "point3d") {
+      const hit = this.pick(e);
+      this.canvas.style.cursor = "crosshair";
+      this.onPoint3dHover?.(hit?.kind === "point3d" ? hit : null);
+      return;
+    }
     if (this.pickMode === "edge") {
       const hit = this.pick(e);
       this.highlightFace(hit?.kind === "face" ? hit : null);

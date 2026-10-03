@@ -46,12 +46,13 @@ export class ExtrudeCommand implements ModelCommand {
   private directionChoice: ChoiceHandle<ExtrudeDirection>;
 
   /** Returns null (after telling the user) if there's nothing to extrude. */
-  static start(ctx: ModelContext, editing: ExtrudeFeature | null): ExtrudeCommand | null {
+  /** `opts.sketch`: start with every shape of that sketch chosen (3D Line hands its loop over). */
+  static start(ctx: ModelContext, editing: ExtrudeFeature | null, opts: { sketch?: string } = {}): ExtrudeCommand | null {
     if (editing === null && ExtrudeCommand.allRegions(ctx).length === 0) {
       showToast("Nothing to extrude - draw a closed shape first (in 2D, or in a sketch).");
       return null;
     }
-    return new ExtrudeCommand(ctx, editing);
+    return new ExtrudeCommand(ctx, editing, opts.sketch ?? null);
   }
 
   private static allRegions(ctx: ModelContext): PickableRegion[] {
@@ -69,6 +70,7 @@ export class ExtrudeCommand implements ModelCommand {
   private constructor(
     private ctx: ModelContext,
     private editing: ExtrudeFeature | null,
+    private preselect: string | null = null,
   ) {
     const hasSolid = (ctx.result()?.bodies.length ?? 0) > 0;
     this.operation = editing?.operation ?? (hasSolid ? "join" : "new");
@@ -198,7 +200,9 @@ export class ExtrudeCommand implements ModelCommand {
     this.candidates = fresh.length > 0 ? fresh : all;
     this.ctx.showWireframes(new Set(this.candidates.map((c) => c.sketchId)));
     this.ctx.view.setPickMode("region", this.candidates);
-    if (this.candidates.length === 1) this.toggle(this.candidates[0]!);
+    const pre = this.candidates.filter((c) => c.sketchId === this.preselect);
+    if (pre.length > 0) for (const c of pre) this.toggle(c);
+    else if (this.candidates.length === 1) this.toggle(this.candidates[0]!);
     this.ctx.status("EXTRUDE", "Pick shapes in the view, set options in the dialog, then OK");
   }
 
