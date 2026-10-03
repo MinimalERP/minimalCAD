@@ -44,6 +44,7 @@ import { HoleCommand } from "./commands/holeCommand";
 import { EdgeBlendCommand } from "./commands/edgeBlendCommand";
 import { RotateCommand } from "./commands/rotateCommand";
 import { Line3dCommand } from "./commands/line3dCommand";
+import { MeasureCommand } from "./commands/measureCommand";
 import { WorkPlaneCommand, planeAxes } from "./commands/workPlaneCommand";
 
 export interface ModelHost {
@@ -242,6 +243,16 @@ export class ModelController {
         return this.run(() => EdgeBlendCommand.start(this.ctx, action, null));
       case "rotate3d":
         return this.run(() => RotateCommand.start(this.ctx, null));
+      case "measure":
+        return this.run(() => MeasureCommand.start(this.ctx, MeasureCommand.lastMode));
+      case "measureangle":
+        return this.run(() => MeasureCommand.start(this.ctx, "angle"));
+      case "measuredist":
+        return this.run(() => MeasureCommand.start(this.ctx, "distance"));
+      case "measureedge":
+        return this.run(() => MeasureCommand.start(this.ctx, "edge"));
+      case "measureface":
+        return this.run(() => MeasureCommand.start(this.ctx, "face"));
       case "line3d":
         return this.run(() => new Line3dCommand(this.ctx));
       case "viewfront":
@@ -292,10 +303,12 @@ export class ModelController {
     else if (["f", "fillet"].includes(t)) this.action("fillet");
     else if (["ro", "rot", "rotate"].includes(t)) this.action("rotate3d");
     else if (["l3", "l", "line", "3dline", "line3d"].includes(t)) this.action("line3d");
+    else if (["mea", "measure", "ma", "ang", "angle"].includes(t)) this.action("measureangle");
+    else if (["di", "dist", "distance"].includes(t)) this.action("measuredist");
     else if (["ch", "cha", "chamfer"].includes(t)) this.action("chamfer");
     else if (["s", "sk", "sketch"].includes(t)) this.action("newsketch");
     else if (["wp", "plane", "workplane", "ucs"].includes(t)) this.action("workplane");
-    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), RO (rotate), L (3D line), S (sketch), WP`);
+    else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), RO (rotate), L (3D line), MEA (measure), DI (distance), S (sketch), WP`);
   }
 
   escape(): void {

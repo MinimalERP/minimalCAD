@@ -109,6 +109,39 @@ function v3(p: { x: number; y: number; z: number }): THREE.Vector3 {
 }
 
 /** Analytic edge -> polyline points (arcs sampled finely: display only). */
+/** A face's own triangles as a translucent overlay mesh. */
+function faceMesh(body: Body, faceId: number, color: number, opacity: number): THREE.Mesh {
+  const { positions, indices, faceIds } = body.mesh;
+  const tri: number[] = [];
+  for (let t = 0; t < faceIds.length; t++) {
+    if (faceIds[t] !== faceId) continue;
+    for (let k = 0; k < 3; k++) {
+      const i = indices[t * 3 + k]!;
+      tri.push(positions[i * 3]!, positions[i * 3 + 1]!, positions[i * 3 + 2]!);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(tri, 3));
+  return new THREE.Mesh(
+    geo,
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+  );
+}
+
+/** An edge as world points along it (display, picking). */
+export function edgePolyline(edge: Edge): Vec3[] {
+  return edgePoints(edge).map((p) => ({ x: p.x, y: p.y, z: p.z }));
+}
+
 function edgePoints(edge: Edge): THREE.Vector3[] {
   const g = edge.geom;
   if (g.kind === "line") return [v3(g.a), v3(g.b)];
@@ -203,6 +236,8 @@ export class ModelView {
   private regionMeshes: { mesh: THREE.Mesh; region: PickableRegion }[] = [];
   private bodyMeshes: THREE.Mesh[] = [];
   private faceHighlight = new THREE.Group();
+  /** Faces kept lit while a command runs (Measure's picked faces). */
+  private pinnedFaces = new THREE.Group();
   private highlightedFaceKey: string | null = null;
 
   private pickMode: "none" | "plane" | "region" | "facePoint" | "surfacePoint" | "edge" | "point3d" = "none";
@@ -297,6 +332,7 @@ export class ModelView {
       this.markerGroup,
       this.dimGroup,
       this.faceHighlight,
+      this.pinnedFaces,
       this.gridGroup,
       this.ucsIcon,
       this.originGroup,
@@ -1114,31 +1150,14 @@ export class ModelView {
     this.highlightedFaceKey = key;
     disposeChildren(this.faceHighlight);
     if (hit?.kind !== "face") return;
-    const { positions, indices, faceIds } = hit.body.mesh;
-    const tri: number[] = [];
-    for (let t = 0; t < faceIds.length; t++) {
-      if (faceIds[t] !== hit.faceId) continue;
-      for (let k = 0; k < 3; k++) {
-        const i = indices[t * 3 + k]!;
-        tri.push(positions[i * 3]!, positions[i * 3 + 1]!, positions[i * 3 + 2]!);
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(tri, 3));
-    const mesh = new THREE.Mesh(
-      geo,
-      new THREE.MeshBasicMaterial({
-        color: WORKPLANE_COLOR,
-        transparent: true,
-        opacity: 0.45,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
-      }),
-    );
-    this.faceHighlight.add(mesh);
+    this.faceHighlight.add(faceMesh(hit.body, hit.faceId, WORKPLANE_COLOR, 0.45));
+  }
+
+  /** Faces kept lit (orange) until cleared -- e.g. the two faces an angle is measured between. */
+  setPinnedFaces(list: readonly { body: Body; faceId: number }[]): void {
+    disposeChildren(this.pinnedFaces);
+    for (const f of list) this.pinnedFaces.add(faceMesh(f.body, f.faceId, 0xffa53a, 0.55));
+    this.requestRender();
   }
 
   private styleHover(): void {

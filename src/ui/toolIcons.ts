@@ -801,6 +801,24 @@ function drawDeleteView(ctx: CanvasRenderingContext2D): void {
   line(ctx, 19, 11, 12, 18);
 }
 
+function drawMeasure3d(ctx: CanvasRenderingContext2D): void {
+  // a protractor arc between two faces, with a ruler along the bottom
+  ctx.save();
+  ctx.strokeStyle = "#d4d4d4";
+  ctx.lineWidth = 1.4;
+  line(ctx, 3, 15, 17, 15);
+  line(ctx, 3, 15, 13, 4);
+  ctx.strokeStyle = ACCENT;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(3, 15, 9, -Math.atan2(11, 10), 0);
+  ctx.stroke();
+  ctx.strokeStyle = "#d4d4d4";
+  ctx.lineWidth = 1;
+  for (let x = 5; x <= 17; x += 3) line(ctx, x, 17, x, 19);
+  ctx.restore();
+}
+
 function drawLine3d(ctx: CanvasRenderingContext2D): void {
   // a slanted closed loop drawn point to point off a block corner
   block(ctx, 2, 10, 8, 7, 3);
@@ -857,6 +875,7 @@ const DRAWERS: Record<string, Drawer> = {
   mirror3d: drawMirror3d,
   rotate3d: drawRotate3d,
   line3d: drawLine3d,
+  measure3d: drawMeasure3d,
   fillet3d: drawFillet3d,
   chamfer3d: drawChamfer3d,
   viewfront: viewCube("front"),
