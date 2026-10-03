@@ -285,6 +285,7 @@ export class ModelView {
       this.setViewName(namedDirection(dir));
     };
     this.viewCube.onHome = () => this.setView("iso");
+    this.viewCube.onOrbit = (az, el) => this.orbitBy(az, el);
 
     this.scene.add(
       this.edgeGroup,
@@ -1148,6 +1149,34 @@ export class ModelView {
     const outside = minX < -1 || maxX > 1 || minY < -1 || maxY > 1;
     const tiny = Math.max(maxX - minX, maxY - minY) < 0.25;
     if (outside || tiny) this.fit();
+  }
+
+  /**
+   * Steps the view round the model, keeping what it looks at and the zoom:
+   * `azimuth` degrees round the vertical (Z), `elevation` degrees up / down
+   * (stopping straight above / below). Lands exactly on the standard views
+   * when stepping from one.
+   */
+  orbitBy(azimuth: number, elevation: number): void {
+    const target = this.controls.target;
+    const offset = this.camera.position.clone().sub(target);
+    const dist = offset.length();
+    const dir = offset.normalize();
+    const snap = (deg: number): number => (Math.abs(deg - Math.round(deg / 15) * 15) < 0.5 ? Math.round(deg / 15) * 15 : deg);
+    const polar = snap((Math.acos(Math.max(-1, Math.min(1, dir.z))) * 180) / Math.PI);
+    const az = snap((Math.atan2(dir.y, dir.x) * 180) / Math.PI);
+    const p = Math.max(0, Math.min(180, polar - elevation));
+    const a = az - azimuth;
+    // Straight down / up is degenerate for a Z-up orbit camera: nudge it,
+    // keeping the azimuth so the plan view stays turned the way asked.
+    const pr = (Math.min(180 - 1e-4, Math.max(1e-4, p)) * Math.PI) / 180;
+    const ar = (a * Math.PI) / 180;
+    const next = new THREE.Vector3(Math.sin(pr) * Math.cos(ar), Math.sin(pr) * Math.sin(ar), Math.cos(pr));
+    this.camera.position.copy(target).addScaledVector(next, dist);
+    this.controls.update();
+    this.requestRender();
+    const pd = (p * Math.PI) / 180;
+    this.setViewName(namedDirection(new THREE.Vector3(Math.sin(pd) * Math.cos(ar), Math.sin(pd) * Math.sin(ar), Math.cos(pd))));
   }
 
   fit(): void {
