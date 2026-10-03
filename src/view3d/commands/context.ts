@@ -28,6 +28,8 @@ export interface ModelContext {
   status(command: string, text: string): void;
   /** The command ended (OK or Cancel): back to idle. */
   done(): void;
+  /** Hand over to another command (e.g. 3D Line -> Extrude). */
+  startCommand(make: () => ModelCommand | null): void;
 }
 
 export interface ModelCommand {
@@ -37,6 +39,8 @@ export interface ModelCommand {
   /** A row of the Model tree was clicked while this command runs; return
    *  true if the command took it (e.g. Pattern: that feature to repeat). */
   onTreePick?(id: string): boolean;
+  /** Typed text from the command bar (e.g. 3D Line coordinates); return true if taken. */
+  textInput?(text: string): boolean;
   /** A key in the 3D view; return true if handled (e.g. Delete a selected dimension). */
   onKey?(e: KeyboardEvent): boolean;
   /** Enter in the 3D view. */

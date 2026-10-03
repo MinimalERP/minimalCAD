@@ -102,7 +102,7 @@ const SKETCH_GROUPS: readonly (readonly string[])[] = [
 ];
 
 /** 3D-workspace actions (handled by the lazily-loaded model module). */
-export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "pattern" | "circpattern" | "mirror3d" | "fillet" | "chamfer" | "rotate3d" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
+export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "pattern" | "circpattern" | "mirror3d" | "fillet" | "chamfer" | "rotate3d" | "line3d" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
 
 /** Drawing-tab actions (handled by the lazily-loaded drawing module). */
 export type DrawingToolAction = "sheet" | "baseview" | "projview" | "sectionview" | "moveview" | "editview" | "deleteview" | "print" | "fit";
@@ -201,6 +201,9 @@ export function buildToolbar(
   );
   addUtilityButton(model, "workplane", "Work Plane - offset / rotate a plane, like a saved UCS (WP)", () =>
     host.modelAction("workplane"),
+  );
+  addUtilityButton(model, "line3d", "3D Line (L) - click points in 3D, snapping to the solid; close a flat loop to extrude it off its own plane", () =>
+    host.modelAction("line3d"),
   );
   addUtilityButton(model, "extrude", "Extrude (E) - push a closed shape out into a solid, or cut with it", () => host.modelAction("extrude"));
   addUtilityButton(model, "revolve", "Revolve (R) - spin a closed shape round an axis line", () => host.modelAction("revolve"));

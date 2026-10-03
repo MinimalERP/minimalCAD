@@ -801,6 +801,24 @@ function drawDeleteView(ctx: CanvasRenderingContext2D): void {
   line(ctx, 19, 11, 12, 18);
 }
 
+function drawLine3d(ctx: CanvasRenderingContext2D): void {
+  // a slanted closed loop drawn point to point off a block corner
+  block(ctx, 2, 10, 8, 7, 3);
+  ctx.save();
+  ctx.strokeStyle = ACCENT;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(10, 10);
+  ctx.lineTo(18, 3);
+  ctx.lineTo(18, 12);
+  ctx.lineTo(10, 17);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
+  for (const [x, y] of [[10, 10], [18, 3], [18, 12], [10, 17]] as const) ctx.fillRect(x - 1.2, y - 1.2, 2.4, 2.4);
+  ctx.restore();
+}
+
 function drawRotate3d(ctx: CanvasRenderingContext2D): void {
   // a block with a turning arrow round it
   block(ctx, 5, 8, 8, 7, 3);
@@ -838,6 +856,7 @@ const DRAWERS: Record<string, Drawer> = {
   circpattern: drawCircPattern,
   mirror3d: drawMirror3d,
   rotate3d: drawRotate3d,
+  line3d: drawLine3d,
   fillet3d: drawFillet3d,
   chamfer3d: drawChamfer3d,
   viewfront: viewCube("front"),
