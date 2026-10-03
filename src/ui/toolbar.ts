@@ -102,7 +102,7 @@ const SKETCH_GROUPS: readonly (readonly string[])[] = [
 ];
 
 /** 3D-workspace actions (handled by the lazily-loaded model module). */
-export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "pattern" | "circpattern" | "mirror3d" | "fillet" | "chamfer" | "rotate3d" | "line3d" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
+export type ModelAction = "newsketch" | "workplane" | "extrude" | "revolve" | "hole" | "pattern" | "circpattern" | "mirror3d" | "fillet" | "chamfer" | "rotate3d" | "line3d" | "measure" | "measureangle" | "measuredist" | "measureedge" | "measureface" | "viewfront" | "viewtop" | "viewright" | "viewiso" | "fit";
 
 /** Drawing-tab actions (handled by the lazily-loaded drawing module). */
 export type DrawingToolAction = "sheet" | "baseview" | "projview" | "sectionview" | "moveview" | "editview" | "deleteview" | "print" | "fit";
@@ -222,6 +222,7 @@ export function buildToolbar(
   addUtilityButton(model, "rotate3d", "Rotate Body (RO) - turn solids about X / Y / Z, an edge, or a round face's axis", () =>
     host.modelAction("rotate3d"),
   );
+  addMeasureButton(model, host);
   model.appendChild(gap());
   addUtilityButton(model, "viewfront", "Front view", () => host.modelAction("viewfront"));
   addUtilityButton(model, "viewtop", "Top view", () => host.modelAction("viewtop"));
@@ -488,6 +489,52 @@ function createIconButton(iconName: string, title: string): HTMLButtonElement {
   btn.appendChild(canvas);
   preventFocusSteal(btn);
   return btn;
+}
+
+/** Measure: the button runs the last-used kind; ▾ lists them all. */
+function addMeasureButton(root: HTMLElement, host: ToolbarWorkspaceHost): void {
+  addUtilityButton(root, "measure3d", "Measure - angle between faces, distance, edge length / radius, face area (MEA)", () => host.modelAction("measure"));
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "measure-more";
+  more.textContent = "▾";
+  more.title = "Choose what to measure";
+  preventFocusSteal(more);
+  root.appendChild(more);
+  const menu = document.createElement("div");
+  menu.className = "file-menu-popover";
+  menu.setAttribute("role", "menu");
+  menu.hidden = true;
+  document.body.appendChild(menu);
+  const items: [string, ModelAction][] = [
+    ["Angle between faces / edges", "measureangle"],
+    ["Distance between points", "measuredist"],
+    ["Edge length / radius", "measureedge"],
+    ["Face area", "measureface"],
+  ];
+  for (const [label, action] of items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "file-menu-item";
+    b.textContent = label;
+    b.setAttribute("role", "menuitem");
+    preventFocusSteal(b);
+    b.addEventListener("click", () => {
+      menu.hidden = true;
+      host.modelAction(action);
+    });
+    menu.appendChild(b);
+  }
+  more.addEventListener("click", () => {
+    menu.hidden = !menu.hidden;
+    if (menu.hidden) return;
+    const r = more.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(r.left - 120, window.innerWidth - menu.offsetWidth - 8))}px`;
+    menu.style.top = `${r.bottom + 4}px`;
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (e.target instanceof Node && !menu.contains(e.target) && e.target !== more) menu.hidden = true;
+  });
 }
 
 function addUtilityButton(root: HTMLElement, iconName: string, title: string, onClick: () => void): void {

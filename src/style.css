@@ -1353,3 +1353,43 @@ body[data-workspace="drawing"] #gl-canvas[hidden] ~ .feature-dialog {
   border-color: #0e639c;
   color: #ffffff;
 }
+
+/* --- 3D Measure: the toolbar's ▾ and the result panel --- */
+#toolbar button.measure-more {
+  width: 12px;
+  margin-left: -2px;
+  padding: 0;
+  color: #b8b8b8;
+  background: transparent;
+  border: none;
+  font-size: 10px;
+  cursor: pointer;
+}
+#toolbar button.measure-more:hover {
+  color: #ffffff;
+}
+.feature-dialog .measure-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 2px;
+}
+.feature-dialog .measure-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.feature-dialog .measure-label {
+  flex: 0 0 96px;
+  color: #a8a8a8;
+}
+.feature-dialog .measure-value {
+  flex: 1 1 auto;
+  color: #ffd400;
+  font-weight: 600;
+  font-size: 14px;
+  user-select: text;
+}
+.feature-dialog .measure-hint {
+  color: #a8a8a8;
+}
