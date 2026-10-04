@@ -8,6 +8,10 @@
  * or -- over empty space -- on the plane through the last point facing you.
  * Once three points span a plane, the loop is held flat on it.
  *
+ * Ortho (F8) runs the next point along X, Y or Z from the last one. The
+ * X / Y / Z axis lines through the origin can be landed on anywhere along
+ * their length.
+ *
  * Closing the loop (click its first point, or type C) makes a work plane
  * through the loop and a sketch of its lines on it, then opens Extrude with
  * that shape chosen: it extrudes off the loop's own plane. Enter finishes an
@@ -32,12 +36,19 @@ import { showToast } from "../../ui/toast";
 type PointHit = Extract<Hit, { kind: "point3d" }>;
 
 const NAME = "3D LINE";
+/** How near (on screen) the cursor must pass an axis line to land on it. */
+const AXIS_SNAP_PX = 10;
+const AXES: readonly (readonly [string, Vec3])[] = [
+  ["X", { x: 1, y: 0, z: 0 }],
+  ["Y", { x: 0, y: 1, z: 0 }],
+  ["Z", { x: 0, y: 0, z: 1 }],
+];
 
 export class Line3dCommand implements ModelCommand {
   private points: Vec3[] = [];
   private solidSnaps: Snap3d[];
   /** Where the cursor would put the next point (for the rubber band and a typed length). */
-  private cursor: { p: Vec3; snapped: boolean } | null = null;
+  private cursor: { p: Vec3; snapped: boolean; label?: string } | null = null;
 
   constructor(private ctx: ModelContext) {
     this.solidSnaps = snapPoints3d(ctx.result()?.bodies ?? []);
@@ -71,9 +82,69 @@ export class Line3dCommand implements ModelCommand {
     return add(ray.o, scale(ray.d, dot(sub(o, ray.o), n) / denom));
   }
 
+  /**
+   * The point on an axis line (through `through`, along X, Y or Z) nearest
+   * the cursor ray; `within` = how far the ray may pass from that line.
+   */
+  private onAxisLine(ray: PointHit["ray"], from: Vec3, within: number): { p: Vec3; axis: string; through: Vec3; a: Vec3 } | null {
+    const pl = this.plane();
+    const d = normalize(ray.d);
+    // Once the loop has its plane the lines are laid flat onto it (the loop
+    // must stay on it): an axis the plane doesn't contain is used as it
+    // falls on the plane.
+    const through = pl === null ? from : sub(from, scale(pl.n, dot(sub(from, pl.origin), pl.n)));
+    let best: { p: Vec3; axis: string; dist: number; through: Vec3; a: Vec3 } | null = null;
+    for (const [axis, world] of AXES) {
+      let a = world;
+      if (pl !== null) {
+        const flat = sub(world, scale(pl.n, dot(world, pl.n)));
+        if (length(flat) < 1e-6) continue; // square to the plane: only a point on it
+        a = normalize(flat);
+      }
+      const b = dot(a, d);
+      const denom = 1 - b * b;
+      if (denom < 1e-6) continue; // seen end-on: no telling where along it
+      const w = sub(through, ray.o);
+      const t = (b * dot(d, w) - dot(a, w)) / denom;
+      const p = add(through, scale(a, t));
+      const off = sub(p, ray.o);
+      const dist = length(sub(off, scale(d, dot(d, off))));
+      if (dist <= within && (best === null || dist < best.dist)) best = { p, axis, dist, through, a };
+    }
+    return best;
+  }
+
+  /** Where two lines cross (within `tol` of each other), or null: parallel, or they pass apart. */
+  private static linesMeet(l1: { through: Vec3; a: Vec3 }, l2: { through: Vec3; a: Vec3 }, tol: number): Vec3 | null {
+    const b = dot(l1.a, l2.a);
+    const denom = 1 - b * b;
+    if (denom < 1e-9) return null;
+    const w = sub(l1.through, l2.through);
+    const t = (b * dot(l2.a, w) - dot(l1.a, w)) / denom;
+    const p = add(l1.through, scale(l1.a, t));
+    const q = add(l2.through, scale(l2.a, dot(l2.a, sub(p, l2.through))));
+    return length(sub(p, q)) <= tol ? p : null;
+  }
+
   /** The point a hover / click gives. */
-  private resolve(hit: PointHit): { p: Vec3; snapped: boolean } | null {
+  private resolve(hit: PointHit): { p: Vec3; snapped: boolean; label?: string } | null {
     if (hit.snap !== null) return { p: hit.snap.p, snapped: true };
+    const lastPoint = this.points[this.points.length - 1];
+    const near = AXIS_SNAP_PX * this.ctx.view.pixelSize();
+    // Ortho: the next point runs along X, Y or Z from the last one. Off, those
+    // three lines still catch a cursor that comes close.
+    const ortho = lastPoint !== undefined && this.ctx.ortho();
+    const along = lastPoint === undefined ? null : this.onAxisLine(hit.ray, lastPoint, ortho ? Infinity : near);
+    // The X / Y / Z axis lines through the origin, anywhere along them --
+    // Ortho or not. Pointing at one wins: where the line from the last point
+    // meets it, or (they don't meet) onto the axis itself, as an osnap would.
+    const axis = this.onAxisLine(hit.ray, { x: 0, y: 0, z: 0 }, near);
+    if (axis !== null) {
+      const meet = along === null ? null : Line3dCommand.linesMeet(along, axis, planeTol([...this.points, axis.p]) * 10);
+      if (meet !== null) return { p: meet, snapped: true, label: `Along ${along!.axis}, on the ${axis.axis} axis` };
+      return { p: axis.p, snapped: true, label: `On the ${axis.axis} axis` };
+    }
+    if (along !== null) return ortho ? { p: along.p, snapped: false, label: `Ortho - along ${along.axis}` } : { p: along.p, snapped: true, label: `Along ${along.axis} from the last point` };
     const pl = this.plane();
     if (pl !== null) {
       const p = Line3dCommand.rayPlane(hit.ray, pl.origin, pl.n);
@@ -89,6 +160,7 @@ export class Line3dCommand implements ModelCommand {
   private onHover(hit: PointHit | null): void {
     this.cursor = hit === null ? null : this.resolve(hit);
     if (hit?.snap != null) this.ctx.status(NAME, `${SNAP_LABEL[hit.snap.kind] ?? hit.snap.kind} - click to use it`);
+    else if (this.cursor?.label !== undefined) this.ctx.status(NAME, `${this.cursor.label} - click, or type a length`);
     else this.prompt();
     this.draw();
   }

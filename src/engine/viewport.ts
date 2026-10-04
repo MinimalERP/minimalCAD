@@ -83,6 +83,21 @@ export class Viewport {
     };
   }
 
+  /** World origin (0,0) at the middle of the viewport, zoomed so `bounds`
+   *  (if any) still fits around it -- how a part sketch opens. */
+  centerOrigin(bounds: Bounds | null): void {
+    const width = this.getViewportWidth() > 0 ? this.getViewportWidth() : 800;
+    const height = this.getViewportHeight() > 0 ? this.getViewportHeight() : 600;
+    this.zoom = 1.0;
+    if (bounds !== null) {
+      const halfW = Math.max(Math.abs(bounds[0]), Math.abs(bounds[2])) * 1.1;
+      const halfH = Math.max(Math.abs(bounds[1]), Math.abs(bounds[3])) * 1.1;
+      const fit = Math.min(halfW > 0.01 ? width / (2 * halfW) : Infinity, halfH > 0.01 ? height / (2 * halfH) : Infinity);
+      if (Number.isFinite(fit)) this.zoom = Math.min(Math.max(fit, MIN_ZOOM), MAX_ZOOM);
+    }
+    this.panOffset = { x: width / 2, y: height / 2 };
+  }
+
   /** Zoom by one wheel notch, keeping `cursorScreenPt`'s world point fixed under the cursor. */
   zoomAtCursor(cursorScreenPt: Point, wheelDeltaY: number): void {
     const factor = wheelDeltaY < 0 ? WHEEL_ZOOM_FACTOR : 1.0 / WHEEL_ZOOM_FACTOR;

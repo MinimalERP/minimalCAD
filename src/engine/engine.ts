@@ -59,6 +59,10 @@ export class Engine {
    *  ModelEdgeRef, opaque here). Null outside a part sketch. */
   modelRefOf: ((entity: Entity) => unknown) | null = null;
 
+  /** A part sketch: its origin (the plane's own 0,0, where the UCS icon
+   *  sits) is a snap point, so geometry can be drawn from / to it. */
+  originSnap = false;
+
   /** Whose own sizes (core/sizeLabels.ts) are shown on the canvas: only the
    *  selected / just-drawn entities (2D drafting -- a big drawing stays
    *  clean), or every entity (a part sketch, which is small). */
@@ -152,7 +156,11 @@ export class Engine {
    *  Tangent osnaps. */
   snap(worldPos: Point, referencePoint: Point | null = null): SnapResult {
     const candidates = this.underlay.length > 0 ? [...this.document.getEntities(), ...this.underlay] : this.document.getEntities();
-    const match = findSnap(worldPos, candidates, this.pickTolerance(10.0), referencePoint);
+    const tolerance = this.pickTolerance(10.0);
+    const match =
+      this.originSnap && Math.hypot(worldPos.x, worldPos.y) <= tolerance
+        ? { point: { x: 0, y: 0 }, snapType: "ORIGIN" }
+        : findSnap(worldPos, candidates, tolerance, referencePoint);
     this.activeSnapPoint = match?.point ?? null;
     this.activeSnapType = match?.snapType ?? null;
     this.commandBar.setSnap(this.activeSnapType);

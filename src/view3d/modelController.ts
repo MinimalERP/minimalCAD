@@ -99,6 +99,7 @@ export class ModelController {
       params: () => this.params(),
       drawingEntities: () => this.drawingEntities(),
       commit: (mutate) => this.commit(mutate),
+      ortho: () => this.host.getEngine().orthoEnabled,
       showWireframes: (alsoShow) => this.showWireframes(this.part(), alsoShow),
       status: (command, text) => this.host.commandBar.setStatus(command, text),
       done: () => this.finishCommand(),
@@ -412,6 +413,15 @@ export class ModelController {
     });
   }
 
+  /** Hide / show a feature: the model is rebuilt without / with it. */
+  private toggleHidden(id: string): void {
+    this.cancel();
+    this.commit((p) => {
+      const f = p.features.find((x) => x.id === id);
+      if (f !== undefined) f.suppressed = f.suppressed !== true;
+    });
+  }
+
   private renderBrowser(part: PartData): void {
     const el = this.browserEl;
     el.innerHTML = "";
@@ -447,6 +457,34 @@ export class ModelController {
       d.className = "mb-detail";
       d.textContent = detail;
       r.append(i, name, d);
+      // A feature can be hidden: the model is rebuilt without it (and shown again the same way).
+      const feature = part.features.find((f) => f.id === id);
+      const isHidden = feature?.suppressed === true;
+      if (feature !== undefined) {
+        if (isHidden) {
+          r.classList.add("suppressed");
+          if (opts.error === undefined) r.title = "Hidden - the model is built without it. Click the eye to show it again";
+        }
+        const eye = document.createElement("span");
+        eye.className = "mb-eye";
+        eye.innerHTML = isHidden ? EYE_OFF_SVG : EYE_SVG;
+        eye.title = isHidden ? "Show this feature" : "Hide this feature";
+        eye.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.toggleHidden(id);
+        });
+        eye.addEventListener("dblclick", (e) => e.stopPropagation());
+        r.appendChild(eye);
+      }
+      r.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        this.selectedNode = id;
+        for (const item of el.querySelectorAll<HTMLElement>(".mb-row")) item.classList.toggle("selected", item === r);
+        const items: [string, () => void][] = [["Edit", onOpen]];
+        if (feature !== undefined) items.push([isHidden ? "Show" : "Hide", () => this.toggleHidden(id)]);
+        if (id !== DRAWING_SKETCH) items.push(["Delete", () => this.deleteNode(id)]);
+        showRowMenu(e.clientX, e.clientY, items);
+      });
       r.addEventListener("click", () => {
         if (this.active?.onTreePick?.(id) === true) return;
         this.selectedNode = id;
@@ -560,6 +598,44 @@ export class ModelController {
     }
     for (const sketch of part.sketches) sketchRow(sketch.id);
   }
+}
+
+const EYE_SVG =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.9"/></svg>';
+const EYE_OFF_SVG =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z"/><path d="M2.5 13.5l11-11"/></svg>';
+
+/** The Model tree's right-click menu; closes on a choice, a click elsewhere, or Esc. */
+function showRowMenu(x: number, y: number, items: readonly (readonly [string, () => void])[]): void {
+  document.querySelector(".mb-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.className = "mb-menu";
+  const close = (): void => {
+    menu.remove();
+    document.removeEventListener("pointerdown", onAway, true);
+    document.removeEventListener("keydown", onKey, true);
+  };
+  const onAway = (e: Event): void => {
+    if (!menu.contains(e.target as Node)) close();
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") close();
+  };
+  for (const [label, run] of items) {
+    const item = document.createElement("div");
+    item.className = "mb-menu-item";
+    item.textContent = label;
+    item.addEventListener("click", () => {
+      close();
+      run();
+    });
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+  menu.style.left = `${Math.min(x, window.innerWidth - menu.offsetWidth - 4)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - menu.offsetHeight - 4)}px`;
+  document.addEventListener("pointerdown", onAway, true);
+  document.addEventListener("keydown", onKey, true);
 }
 
 /** "45° from face of Extrude001" -- tree detail of a plane tied to the model. */

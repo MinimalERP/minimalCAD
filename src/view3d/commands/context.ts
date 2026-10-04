@@ -26,6 +26,8 @@ export interface ModelContext {
   showWireframes(alsoShow?: ReadonlySet<string>): void;
   /** One-line hint in the command bar (no typing needed). */
   status(command: string, text: string): void;
+  /** Whether Ortho (F8 / the command bar's ORTHO) is on. */
+  ortho(): boolean;
   /** The command ended (OK or Cancel): back to idle. */
   done(): void;
   /** Hand over to another command (e.g. 3D Line -> Extrude). */

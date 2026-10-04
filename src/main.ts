@@ -340,6 +340,19 @@ const mobileControls: [string, () => void][] = [
   ["mobile-escape", () => dispatchSyntheticKey("Escape")],
   ["mobile-enter", () => dispatchSyntheticKey("Enter")],
 ];
+// F8 toggles Ortho wherever focus is -- mid-command it sits in the command
+// bar's distance / angle field, not on the canvas. Capture phase, so a box
+// that keeps its own keys to itself (the value editor) doesn't swallow it.
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key !== "F8") return;
+    e.preventDefault();
+    getActiveEngine().toggleOrtho();
+    view.requestRedraw();
+  },
+  true,
+);
 // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z) in every workspace -- 2D, sketch, 3D,
 // drawing sheet. A text box with something typed in it keeps the browser's
 // own undo for its text.

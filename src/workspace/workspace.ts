@@ -26,6 +26,7 @@ import { emptyPart, parsePart } from "../part/types";
 import type { ModelController } from "../view3d/modelController";
 import type { DrawingController } from "../drawing/drawingController";
 import { showToast } from "../ui/toast";
+import { boundsOf } from "../core/document";
 
 export interface WorkspaceDeps {
   canvasEl: HTMLCanvasElement;
@@ -185,10 +186,14 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
       engine.modelRefOf = reference.modelRefOf;
     }
     engine.sizeLabelMode = "all";
+    engine.originSnap = true;
     session.sketch = { sketchId, engine, viewport, plane: sketchPlane };
     session.workspace = "sketch";
     this.apply(session);
-    if (engine.document.entities.length > 0 || engine.underlay.length > 0) engine.zoomExtents();
+    // Opens with the plane's origin (the UCS icon) in the middle of the
+    // screen, whatever is already there fitted around it.
+    const all = [...engine.document.entities, ...engine.underlay];
+    viewport.centerOrigin(all.length > 0 ? boundsOf(all) : null);
   }
 
   // --- drawing tabs ---

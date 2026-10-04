@@ -496,7 +496,7 @@ function createIconButton(iconName: string, title: string): HTMLButtonElement {
 
 /** Measure: the button runs the last-used kind; ▾ lists them all. */
 function addMeasureButton(root: HTMLElement, host: ToolbarWorkspaceHost): void {
-  addUtilityButton(root, "measure3d", "Measure - angle between faces, distance, edge length / radius, face area (MEA)", () => host.modelAction("measure"));
+  addUtilityButton(root, "measure3d", "Measure - angle, distance between points or between faces / edges, edge length / radius, face area, solid volume (MEA)", () => host.modelAction("measure"));
   const more = document.createElement("button");
   more.type = "button";
   more.className = "measure-more";

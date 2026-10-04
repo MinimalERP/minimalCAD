@@ -32,6 +32,8 @@
 
 import { computeGridLines } from "../engine/grid";
 import { entityAt, gripAt } from "../engine/picking";
+import { Circle } from "../entities/circle";
+import { Arc } from "../entities/arc";
 import type { Viewport } from "../engine/viewport";
 import { pointDistance, type Point } from "../core/types";
 import type { Entity } from "../entities/entity";
@@ -440,10 +442,39 @@ export class CanvasView {
       this.requestRedraw();
       return;
     }
-    if (this.engine.commandManager.currentCommand !== null) return; // don't interrupt an already-active command/gesture
-
     const worldPos = this.viewport.screenToWorld(this.eventToScreenPoint(e));
     const tolerance = this.engine.pickTolerance();
+    // The second click of the pair may have grabbed one of the shape's own
+    // grips (a circle's sit right on its outline): that is this double-click,
+    // not a grip edit.
+    const current = this.engine.commandManager.currentCommand;
+    if (current !== null && current === this.clickGripCommand) this.engine.cancelCommand();
+    if (this.engine.commandManager.currentCommand !== null) return; // don't interrupt an already-active command/gesture
+
+    // A circle / arc: type its new diameter / radius right there.
+    const round = entityAt(this.engine.document.getEntities(), worldPos, tolerance);
+    if ((round instanceof Circle || round instanceof Arc) && this.engine.backdrop === null) {
+      this.engine.selection.clear();
+      this.engine.selection.select(round);
+      this.dragEntities = null;
+      this.dragLastPos = null;
+      this.dragMoved = false;
+      this.render(); // its size label, now that it is selected
+      const shown = this.valueLabels.find((l) => l.group === round);
+      const size = sizeLabelsOf(round)[0];
+      if (shown !== undefined) shown.edit();
+      else if (size !== undefined) {
+        // Sizes are hidden (CONS off): the box opens where it was clicked.
+        this.openValueEditor(-1, round, { x: s.x, y: s.y, w: 0, h: 0 }, size.name.toUpperCase(), formatSize(size.value), (value) => {
+          const before = this.engine.document.toDict();
+          if (!applySize(round, size.key, value)) return "That size can't be set on this shape any more";
+          this.engine.undo.push(before);
+          return null;
+        });
+      }
+      return;
+    }
+
     for (const entity of this.engine.document.getEntities()) {
       if (!(entity instanceof Text || entity instanceof Dimension) || !entity.hitTest(worldPos, tolerance)) continue;
 
@@ -517,6 +548,7 @@ export class CanvasView {
       this.engine.commandManager.startCommand(commandName);
       const grip = this.engine.commandManager.currentCommand as GripCommand | null;
       grip?.begin(gripHit.entity, gripHit.extra);
+      this.clickGripCommand = this.engine.commandManager.currentCommand;
       this.requestRedraw();
       return;
     }
@@ -886,13 +918,8 @@ export class CanvasView {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
-    if (e.key === "F8") {
-      this.engine.toggleOrtho();
-      e.preventDefault();
-      this.requestRedraw();
-      return;
-    }
-
+    // F8 (Ortho) is handled window-wide in main.ts: it has to work while the
+    // command bar's distance / angle field holds focus, not just the canvas.
     if (e.key === "Escape") {
       this.engine.cancelCommand(); // also clears snap feedback -- see engine/engine.ts
       this.commandBuffer = "";
@@ -1279,6 +1306,8 @@ export class CanvasView {
    *  until the next idle click). A big jump -- a file opened, a paste -- is
    *  not someone drawing: nothing is marked. */
   private valueEditor: { close(): void } | null = null;
+  /** The grip command the last idle click started, if any (see onDoubleClick). */
+  private clickGripCommand: unknown = null;
   /** Geometric-constraint glyphs drawn in the last frame, as screen boxes. */
   private constraintGlyphs: { x: number; y: number; w: number; h: number; id: string; name: string }[] = [];
 

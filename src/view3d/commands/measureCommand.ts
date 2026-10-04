@@ -5,13 +5,15 @@
  * Measure (read-only, nothing is added to the model):
  *  - Angle:    two flat faces (or two straight edges) -> their angle; parallel faces also give the gap;
  *  - Distance: two points, snapping to corners / edge middles / circle centres -> distance and dX dY dZ;
+ *  - Between:  two faces / edges -> the distance between them (gap of parallel faces, centre distance of holes);
  *  - Edge:     an edge -> length, or radius / diameter / arc length;
- *  - Face:     a face -> area (and radius if round).
+ *  - Face:     a face -> area (and radius if round);
+ *  - Solid:    a solid -> volume, surface, overall size, centre of mass.
  * A small panel shows the result; clicking again starts a new measurement.
  */
 
 import type { Body, Edge, Face } from "../../part/kernel/types";
-import { edgeAngle, edgeMeasure, faceAngle, faceMeasure, pointDistance } from "../../part/measure";
+import { betweenMeasure, edgeAngle, edgeMeasure, faceAngle, faceMeasure, pointDistance, solidMeasure } from "../../part/measure";
 import { snapPoints3d } from "../../part/line3d";
 import type { Vec3 } from "../../part/vec3";
 import type { Hit } from "../modelView";
@@ -21,14 +23,16 @@ import type { ChoiceHandle, SelectionHandle } from "../featureDialog";
 import type { ModelCommand, ModelContext } from "./context";
 import { showToast } from "../../ui/toast";
 
-export type MeasureMode = "angle" | "distance" | "edge" | "face";
+export type MeasureMode = "angle" | "distance" | "between" | "edge" | "face" | "solid";
 
 const NAME = "MEASURE";
 const PROMPT: Record<MeasureMode, string> = {
   angle: "Click two flat faces (or two straight edges) to measure the angle between them",
   distance: "Click two points - corners, edge middles and circle centres snap",
+  between: "Click two faces or edges - the distance between them (parallel faces, holes' centres, a hole to a face)",
   edge: "Click an edge to measure its length (or radius)",
   face: "Click a face to measure its area",
+  solid: "Click a solid to measure its volume, surface and overall size",
 };
 
 const fmt = (v: number): string => `${+v.toFixed(3)}`;
@@ -65,9 +69,11 @@ export class MeasureCommand implements ModelCommand {
       "Measure",
       [
         { value: "angle", label: "Angle", title: "Angle between two faces or two edges" },
-        { value: "distance", label: "Distance", title: "Distance between two points" },
+        { value: "distance", label: "Points", title: "Distance between two points" },
+        { value: "between", label: "Between", title: "Distance between two faces or edges: the gap of parallel faces, the centre distance of holes" },
         { value: "edge", label: "Edge", title: "Length, or radius of a round edge" },
         { value: "face", label: "Face", title: "Area of a face" },
+        { value: "solid", label: "Solid", title: "Volume, surface and overall size of a solid" },
       ],
       mode,
       (m) => this.setMode(m),
@@ -90,7 +96,7 @@ export class MeasureCommand implements ModelCommand {
     if (mode === "distance") view.setPoint3dMode(snapPoints3d(this.bodies));
     else {
       const all = this.bodies.flatMap((body) => body.edges.map((edge) => ({ body, edge })));
-      const wanted = mode === "edge" ? all : mode === "angle" ? all.filter((e) => e.edge.geom.kind === "line") : [];
+      const wanted = mode === "edge" || mode === "between" ? all : mode === "angle" ? all.filter((e) => e.edge.geom.kind === "line") : [];
       this.edges = wanted.map((e) => ({ ...e, poly: edgePolyline(e.edge) }));
       view.setEdgePickMode(this.edges.map((e) => e.poly));
     }
@@ -130,11 +136,11 @@ export class MeasureCommand implements ModelCommand {
       if (face !== undefined) pick = { kind: "face", body: hit.body, face };
     }
     if (pick === null) return;
-    const need = this.mode === "angle" ? 2 : 1;
+    const need = this.mode === "angle" || this.mode === "between" ? 2 : 1;
     // A new pick after a finished measurement starts over; Angle needs two of the same kind.
-    if (this.picked.length >= need || (this.picked.length === 1 && this.picked[0]!.kind !== pick.kind)) this.reset();
+    if (this.picked.length >= need || (this.mode === "angle" && this.picked.length === 1 && this.picked[0]!.kind !== pick.kind)) this.reset();
     if (this.mode === "edge" && pick.kind !== "edge") return this.note("Click an edge (the lines along the solid), not a face");
-    if (this.mode === "face" && pick.kind !== "face") return;
+    if ((this.mode === "face" || this.mode === "solid") && pick.kind !== "face") return;
     const same = (q: Picked): boolean =>
       q.body === pick.body && (q.kind === "face" && pick.kind === "face" ? q.face.id === pick.face.id : q.kind === "edge" && pick.kind === "edge" && q.edge === pick.edge);
     if (this.picked.some(same)) return this.note(`That ${pick.kind} is already picked - click a different one`);
@@ -159,7 +165,10 @@ export class MeasureCommand implements ModelCommand {
   }
 
   private drawPicked(hover: Vec3[][] = []): void {
-    const faces = this.picked.flatMap((p) => (p.kind === "face" ? [{ body: p.body, faceId: p.face.id }] : []));
+    const faces =
+      this.mode === "solid"
+        ? this.picked.flatMap((p) => p.body.faces.map((f) => ({ body: p.body, faceId: f.id }))) // the whole solid
+        : this.picked.flatMap((p) => (p.kind === "face" ? [{ body: p.body, faceId: p.face.id }] : []));
     const edges = this.picked.flatMap((p) => (p.kind === "edge" ? [edgePolyline(p.edge)] : []));
     this.ctx.view.setPinnedFaces(faces);
     this.ctx.view.setEdgeHighlights(edges, hover);
@@ -199,6 +208,28 @@ export class MeasureCommand implements ModelCommand {
       ];
       if (r.gap !== undefined) out.push({ label: "Parallel, gap", value: `${fmt(r.gap)} mm` });
       return out;
+    }
+    if (this.mode === "between") {
+      if (this.picked.length < 2) return this.picked.length === 0 ? "Click the first face or edge" : "Click the second face or edge";
+      const [a, b] = this.picked as [Picked, Picked];
+      const r = betweenMeasure(a.kind === "face" ? a.face : a.edge, b.kind === "face" ? b.face : b.edge);
+      if (typeof r === "string") return r;
+      const out = [{ label: r.skew === true ? "Closest approach" : r.toCentre ? "Centre distance" : "Distance", value: `${fmt(r.distance)} mm` }];
+      if (r.gap !== undefined) out.push({ label: "Gap between", value: `${fmt(r.gap)} mm` });
+      return out;
+    }
+    if (this.mode === "solid") {
+      const p = this.picked[0];
+      if (p === undefined) return "Click a solid";
+      const m = solidMeasure(p.body);
+      return [
+        { label: "Volume", value: `${fmt(m.volume)} mm³` },
+        { label: "Surface", value: `${fmt(m.area)} mm²` },
+        { label: "Size X", value: `${fmt(m.size.x)} mm` },
+        { label: "Size Y", value: `${fmt(m.size.y)} mm` },
+        { label: "Size Z", value: `${fmt(m.size.z)} mm` },
+        { label: "Centre", value: `${fmt(m.centre.x)}, ${fmt(m.centre.y)}, ${fmt(m.centre.z)}` },
+      ];
     }
     if (this.mode === "edge") {
       const p = this.picked[0];
@@ -248,7 +279,7 @@ export class MeasureCommand implements ModelCommand {
       copy.textContent = "Copy";
       copy.title = "Copy the value";
       copy.addEventListener("click", () => {
-        void navigator.clipboard?.writeText(line.value.replace(/\s*(mm²|mm|°)$/, "")).then(
+        void navigator.clipboard?.writeText(line.value.replace(/\s*(mm³|mm²|mm|°)$/, "")).then(
           () => showToast(`Copied ${line.value}`),
           () => showToast("Couldn't copy - select the value instead"),
         );

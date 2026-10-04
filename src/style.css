@@ -895,7 +895,7 @@ body {
   top: 34px;
   left: 10px;
   min-width: 190px;
-  max-width: 280px;
+  max-width: 340px;
   max-height: calc(100% - 20px);
   overflow-y: auto;
   padding: 6px 0;
@@ -945,6 +945,47 @@ body {
 #model-browser .mb-detail {
   margin-left: auto;
   color: #8a8a8a;
+}
+/* Hide / show a feature: the eye appears on hover, and stays on a hidden one. */
+#model-browser .mb-eye {
+  display: flex;
+  color: #8a8a8a;
+  cursor: pointer;
+  visibility: hidden;
+}
+#model-browser .mb-row:hover .mb-eye,
+#model-browser .mb-row.suppressed .mb-eye {
+  visibility: visible;
+}
+#model-browser .mb-eye:hover {
+  color: #ffffff;
+}
+#model-browser .mb-row.suppressed .mb-name,
+#model-browser .mb-row.suppressed .mb-icon,
+#model-browser .mb-row.suppressed .mb-detail {
+  opacity: 0.45;
+}
+#model-browser .mb-row.suppressed .mb-name {
+  text-decoration: line-through;
+}
+.mb-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 110px;
+  padding: 4px 0;
+  background: #252526;
+  border: 1px solid #454545;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  color: #cccccc;
+  font: 12px Consolas, Menlo, monospace;
+}
+.mb-menu-item {
+  padding: 4px 14px;
+  cursor: default;
+}
+.mb-menu-item:hover {
+  background: #094771;
+  color: #ffffff;
 }
 
 /* 3D view overlays (view3d/modelView.ts, viewCube.ts) -- only while the

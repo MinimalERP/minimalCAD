@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Line } from "../entities/line";
 import { rebuild } from "./rebuild";
-import { edgeAngle, edgeMeasure, faceAngle, faceMeasure, pointDistance } from "./measure";
+import { betweenMeasure, edgeAngle, edgeMeasure, faceAngle, faceMeasure, pointDistance, solidMeasure } from "./measure";
+import type { BetweenMeasure } from "./measure";
 import { emptyPart } from "./types";
 import type { HoleFeature, PartData } from "./types";
 import type { Face } from "./kernel/types";
@@ -48,6 +49,40 @@ describe("Measure", () => {
     expect(edgeAngle(long, short)).toBeCloseTo(90);
     expect(pointDistance({ x: 0, y: 0, z: 0 }, { x: 80, y: 40, z: 10 }).distance).toBeCloseTo(Math.hypot(80, 40, 10));
     expect(faceMeasure(body, top).area).toBeCloseTo(3200);
+  });
+
+  it("between: parallel faces, parallel edges, faces that meet", () => {
+    expect(betweenMeasure(top, bottom)).toMatchObject({ distance: expect.closeTo(10, 9), toCentre: false });
+    expect(typeof betweenMeasure(top, side)).toBe("string");
+    const long = body.edges.filter((e) => e.geom.kind === "line" && Math.abs((edgeMeasure(e) as { length: number }).length - 80) < 1e-6);
+    const ds = long.slice(1).map((e) => (betweenMeasure(long[0]!, e) as { distance: number }).distance).sort((a, b) => a - b);
+    expect(ds[0]).toBeCloseTo(10);
+    expect(ds[ds.length - 1]).toBeCloseTo(Math.hypot(40, 10));
+    // An edge against the face it runs along the far side of.
+    const onTop = long.find((e) => e.geom.kind === "line" && Math.abs(e.geom.a.z - 10) < 1e-9)!;
+    expect(betweenMeasure(bottom, onTop)).toMatchObject({ distance: expect.closeTo(10, 9) });
+  });
+
+  it("between: two holes' centre distance and the wall between, a hole to a side face", () => {
+    const hole: HoleFeature = { id: "H1", type: "hole", face: top.ref, centers: [{ x: 10, y: 10 }, { x: 40, y: 10 }], diameter: "8", depth: "5", style: "plain", extent: "through" };
+    const b = rebuild({ ...part(), features: [...part().features, hole] }, PLATE).bodies[0]!;
+    const [c1, c2] = b.faces.filter((f) => f.geom.kind === "cylinder");
+    expect(betweenMeasure(c1!, c2!)).toMatchObject({ distance: expect.closeTo(30, 6), gap: expect.closeTo(22, 6), toCentre: true });
+    const rims = b.edges.filter((e) => e.geom.kind === "arc");
+    const far = Math.max(...rims.map((e) => (betweenMeasure(rims[0]!, e) as { distance: number }).distance));
+    expect(far).toBeCloseTo(Math.hypot(30, 10)); // across to the other hole's rim on the other side
+    const dists = b.faces.filter((f) => f.geom.kind === "plane" && Math.abs(f.geom.normal.z) < 1e-9).map((f) => (betweenMeasure(c1!, f) as BetweenMeasure).distance);
+    expect(Math.min(...dists)).toBeCloseTo(10);
+    expect(typeof betweenMeasure(c1!, flat(b.faces, 0, 0, 1))).toBe("string"); // the hole runs through the top face
+  });
+
+  it("solid: volume, surface, overall size, centre", () => {
+    const m = solidMeasure(body);
+    expect(m.volume).toBeCloseTo(32000);
+    expect(m.area).toBeCloseTo(2 * (3200 + 800 + 400));
+    expect([m.size.x, m.size.y, m.size.z].sort((a, b) => a - b)).toEqual([expect.closeTo(10, 6), expect.closeTo(40, 6), expect.closeTo(80, 6)]);
+    expect(m.centre.z).toBeCloseTo(5);
+    expect(Math.abs(m.centre.x)).toBeCloseTo(40);
   });
 
   it("a hole: circle edge radius and round face radius", () => {
