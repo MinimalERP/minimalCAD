@@ -616,6 +616,15 @@ function itemsToShow(): LibraryItem[] {
 
 function renderItemsListInto(engine: Engine, container: HTMLDivElement): void {
   container.replaceChildren();
+  // Nothing is listed until something is searched for: an item master runs to thousands, and one comes here for a part by its number.
+  if (itemsQuery.trim() === "") {
+    const hint = document.createElement("div");
+    hint.className = "cloud-panel-status";
+    hint.textContent = cachedItems.length === 0 ? "No stock items yet: create them in MinimalERP." : "Type a part number or name to find an item.";
+    container.appendChild(hint);
+    return;
+  }
+
   const items = itemsToShow();
 
   if (items.length === 0) {
