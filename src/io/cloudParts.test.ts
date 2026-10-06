@@ -62,6 +62,7 @@ describe("labels", () => {
   it("an item is its part number and name; a part is the part number (or the name) and the file", () => {
     expect(itemLabel(BRACKET)).toBe("101027520 — L Bracket");
     expect(itemLabel(WASHER)).toBe("Washer");
+    expect(itemLabel({ code: "101011296", name: "101011296 - TB,CMBSTR,92MM" })).toBe("101011296 - TB,CMBSTR,92MM");
     expect(partLabel(BRACKET, "Drawing")).toBe("101027520 / Drawing");
     expect(partLabel(WASHER, "Part")).toBe("Washer / Part");
   });

@@ -113,9 +113,11 @@ export function rememberCompany(companyId: string): void {
 
 // ---- items and their files ----------------------------------------------
 
-/** "101027520 — L Bracket", or just the name for an item without a part number. */
+/** "101027520 — L Bracket", or just the name for an item without a part number (or whose name starts with it). */
 export function itemLabel(item: Pick<LibraryItem, "code" | "name">): string {
-  return item.code !== null && item.code !== "" ? `${item.code} — ${item.name}` : item.name;
+  // many item names already begin with their own part number ("101011296 - TB,CMBSTR,92MM"): it is not said twice
+  if (item.code === null || item.code === "" || item.name.startsWith(item.code)) return item.name;
+  return `${item.code} — ${item.name}`;
 }
 
 /** How a file is named in the Insert / Save to Library commands:
