@@ -27,13 +27,11 @@ jobs:
       - run: npm test
       - run: npm run build
         env:
-          # Browser-safe values only (protected by Row Level Security, see
-          # supabase/migrations/0001_drawings.sql) -- Vite inlines VITE_-
-          # prefixed vars into the built bundle at this step, so these must
-          # never be the service-role/secret key. Set both as repository
-          # secrets under Settings -> Secrets and variables -> Actions.
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          # MinimalERP's Supabase project: this site signs in with the MinimalERP account and reads its item master.
+          # Both values are PUBLIC by design (the same two MinimalERP's own site is built with; row-level security and the
+          # cad Edge Function are what protect the data) -- never put a service-role/secret key here or anywhere in src/.
+          VITE_SUPABASE_URL: https://iifxhhnwhglhyxroqiqa.supabase.co
+          VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpZnhoaG53aGdsaHl4cm9xaXFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwMDEwMzUsImV4cCI6MjEwNTU3NzAzNX0.4tUuie0yXbUtwNTpWuU1o29veocI3amuEOAoljKQTn0
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
