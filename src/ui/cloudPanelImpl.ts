@@ -347,6 +347,7 @@ function buildSaveBar(engine: Engine): HTMLElement {
 
     const afterSave = () => {
       engine.cloudDrawingName = name;
+      engine.setTitle(name);
       showToast(`Saved "${name}" to the cloud.`);
       refreshAndRender();
     };
@@ -392,6 +393,7 @@ function buildSaveBar(engine: Engine): HTMLElement {
       }
       engine.cloudDrawingId = result.value.id;
       engine.cloudDrawingName = name;
+      engine.setTitle(name);
       showToast(`Saved "${name}" as a new cloud drawing.`);
       refreshAndRender();
     });
@@ -445,6 +447,7 @@ function buildDrawingRow(engine: Engine, drawing: CloudDrawingSummary): HTMLElem
       engine.zoomExtents();
       engine.cloudDrawingId = result.value.id;
       engine.cloudDrawingName = result.value.name;
+      engine.setTitle(result.value.name);
       requestRedrawRef!();
       render();
       if (parseResult.skippedCount > 0) {
@@ -717,6 +720,7 @@ function openItemFile(engine: Engine, fileId: string, label: string | undefined)
       itemLabel: label ?? (item !== undefined ? itemLabel(item) : "Item"),
       name: file.name,
     };
+    engine.setTitle(`${engine.itemFile.itemLabel} / ${file.name}`);
     requestRedrawRef?.();
     if (panelEl !== null && !panelEl.hidden) render();
     showToast(`Opened ${engine.itemFile.itemLabel} / ${file.name}. Save writes it back to the item.`);
@@ -811,6 +815,7 @@ function saveOntoItem(engine: Engine, item: LibraryItem): void {
     if (!selectionOnly) {
       engine.clearCloudDrawing();
       engine.itemFile = { id: result.value.id, companyId: of.id, itemId: item.id, itemLabel: itemLabel(item), name: result.value.name };
+      engine.setTitle(`${itemLabel(item)} / ${result.value.name}`);
       engine.undo.markClean();
     }
     showToast(`Saved "${name}" on ${itemLabel(item)}.`);

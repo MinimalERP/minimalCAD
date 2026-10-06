@@ -407,7 +407,10 @@ function buildFileMenu(
       return;
     }
     const filename = promptFilename("Save Drawing", "jcad");
-    if (filename !== null) saveDocumentToFile(getActiveEngine().document, filename);
+    if (filename !== null) {
+      saveDocumentToFile(getActiveEngine().document, filename);
+      getActiveEngine().setTitle(filename.replace(/\.jcad$/i, ""));
+    }
   });
   addItem("Save to PC", canSaveOpen, () => {
     const filename = promptFilename("Save Drawing", "jcad");
@@ -425,6 +428,7 @@ function buildFileMenu(
       engine.undo.clear();
       engine.zoomExtents();
       engine.clearCloudDrawing();
+      if (result.fileName !== undefined) engine.setTitle(result.fileName);
       host.documentChanged();
       if (parseResult.skippedCount > 0) showToast(`${parseResult.skippedCount} unsupported entity type(s) were skipped.`);
     });

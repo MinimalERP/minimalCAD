@@ -137,6 +137,17 @@ export class Engine {
    *  drawing identity above, for the same reason. */
   itemFile: { id: string; companyId: string; itemId: string; itemLabel: string; name: string } | null = null;
 
+  /** Set by main.ts for each tab: names the tab after the drawing in it. */
+  onTitle: ((title: string) => void) | null = null;
+
+  /** Call when this tab's drawing gets a name -- a file opened from disk, a
+   *  cloud drawing or an item's file opened or saved -- so the tab strip
+   *  shows which drawing each tab holds instead of "Untitled 3". */
+  setTitle(title: string): void {
+    const trimmed = title.trim();
+    if (trimmed !== "") this.onTitle?.(trimmed);
+  }
+
   constructor(
     viewport: Viewport,
     commandBar: CommandBar,

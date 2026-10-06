@@ -87,7 +87,8 @@ export function downloadPdfBytes(bytes: Uint8Array, filename = `minimalcad-${tim
 
 /** Opens the browser's file picker, reads the chosen file as JSON, and resolves
  *  with the parse result -- or null if the user cancelled the picker. */
-export function pickAndReadDocumentFile(): Promise<ParseJsonResult | null> {
+/** `fileName` is the chosen file's name without its extension (the tab is named after it). */
+export function pickAndReadDocumentFile(): Promise<(ParseJsonResult & { fileName?: string }) | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
@@ -104,7 +105,7 @@ export function pickAndReadDocumentFile(): Promise<ParseJsonResult | null> {
       }
       file
         .text()
-        .then((text) => resolve(parseDocumentJson(text)))
+        .then((text) => resolve({ ...parseDocumentJson(text), fileName: file.name.replace(/\.(jcad|json)$/i, "") }))
         .catch(() => resolve({ ok: false, error: "Could not read file" }));
     });
 

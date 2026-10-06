@@ -98,13 +98,16 @@ function getTabEngine(): Engine {
 }
 
 function newSession(): TabSession {
-  return createTabSession(
+  const session = createTabSession(
     () => canvasEl.clientWidth,
     () => canvasEl.clientHeight,
     commandBar,
     requestRedraw,
     onCommandChanged,
   );
+  // the tab is named after the drawing opened or saved in it (see Engine.setTitle)
+  session.engine.onTitle = (title) => renameSession(session.id, title);
+  return session;
 }
 
 // The very first tab -- created up front since CanvasView's constructor
