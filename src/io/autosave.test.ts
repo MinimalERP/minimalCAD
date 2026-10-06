@@ -28,15 +28,17 @@ function makeChain<T>(result: FakeResult<T>) {
 }
 
 const mockFrom = vi.fn();
+const mockInvoke = vi.fn();
 
 vi.mock("../lib/supabaseClient", () => ({
-  getSupabaseClient: () => ({ from: mockFrom }),
+  getSupabaseClient: () => ({ from: mockFrom, functions: { invoke: mockInvoke } }),
 }));
 
 const { loadAutosave, writeAutosave, clearAutosave, resetAutosaveSession } = await import("./autosave");
 
 beforeEach(() => {
   mockFrom.mockReset();
+  mockInvoke.mockReset();
   resetAutosaveSession();
 });
 
@@ -76,61 +78,23 @@ describe("loadAutosave", () => {
   });
 });
 
-describe("writeAutosave", () => {
-  it("inserts a new row the first time it's called", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: { id: "new-row" }, error: null }));
-    const result = await writeAutosave({ entities: [], constraints: [] });
-    expect(result).toEqual({ ok: true, value: undefined });
-    expect(mockFrom).toHaveBeenCalledWith("drawings");
-  });
-
-  it("updates the same row on subsequent calls instead of inserting again", async () => {
-    mockFrom.mockReturnValueOnce(makeChain({ data: { id: "row-1" }, error: null }));
-    await writeAutosave({ entities: [], constraints: [] });
-
-    // The cached row id from the first call means this second write should
-    // resolve via a single update/eq/select/maybeSingle chain -- exactly one
-    // more mockFrom call, with no separate insert-fallback chain needed.
-    mockFrom.mockReturnValueOnce(makeChain({ data: { id: "row-1" }, error: null }));
-    const result = await writeAutosave({ entities: [{ type: "line" }], constraints: [] });
-    expect(result).toEqual({ ok: true, value: undefined });
-    expect(mockFrom).toHaveBeenCalledTimes(2);
-  });
-
-  it("re-creates the row if the cached one was deleted elsewhere", async () => {
-    mockFrom.mockReturnValueOnce(makeChain({ data: { id: "row-1" }, error: null }));
-    await writeAutosave({ entities: [], constraints: [] });
-
-    // The update against the now-missing row resolves with no row (RLS/PostgREST
-    // returns null data rather than an error for a vanished match).
-    mockFrom.mockReturnValueOnce(makeChain({ data: null, error: null }));
-    mockFrom.mockReturnValueOnce(makeChain({ data: { id: "row-2" }, error: null }));
-
-    const result = await writeAutosave({ entities: [], constraints: [] });
-    expect(result).toEqual({ ok: true, value: undefined });
-    expect(mockFrom).toHaveBeenCalledTimes(3);
-  });
-
-  it("surfaces the underlying error on failure", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: null, error: { message: "permission denied" } }));
-    const result = await writeAutosave({ entities: [], constraints: [] });
-    expect(result).toEqual({ ok: false, error: "permission denied" });
-  });
-});
-
-describe("clearAutosave", () => {
-  it("is a no-op (ok) when nothing has been written yet this session", async () => {
-    const result = await clearAutosave();
-    expect(result).toEqual({ ok: true, value: undefined });
+describe("writeAutosave / clearAutosave", () => {
+  it("writes the one slot through the cad function (the server finds or makes the row)", async () => {
+    mockInvoke.mockResolvedValue({ data: { ok: true, value: { id: "row-1" } }, error: null });
+    const snapshot = { entities: [{ type: "line" }], constraints: [] };
+    expect(await writeAutosave(snapshot)).toEqual({ ok: true, value: undefined });
+    expect(mockInvoke).toHaveBeenCalledWith("cad", { body: { action: "drawing-save", autosave: true, document: snapshot } });
     expect(mockFrom).not.toHaveBeenCalled();
   });
 
-  it("deletes the cached row", async () => {
-    mockFrom.mockReturnValueOnce(makeChain({ data: { id: "row-1" }, error: null }));
-    await writeAutosave({ entities: [], constraints: [] });
+  it("surfaces the underlying error on failure", async () => {
+    mockInvoke.mockResolvedValue({ data: { ok: false, message: "Sign in first" }, error: null });
+    expect(await writeAutosave({ entities: [], constraints: [] })).toEqual({ ok: false, error: "Sign in first" });
+  });
 
-    mockFrom.mockReturnValueOnce(makeChain({ data: null, error: null }));
-    const result = await clearAutosave();
-    expect(result).toEqual({ ok: true, value: undefined });
+  it("clears the slot through the cad function", async () => {
+    mockInvoke.mockResolvedValue({ data: { ok: true, value: {} }, error: null });
+    expect(await clearAutosave()).toEqual({ ok: true, value: undefined });
+    expect(mockInvoke).toHaveBeenCalledWith("cad", { body: { action: "drawing-delete", autosave: true } });
   });
 });

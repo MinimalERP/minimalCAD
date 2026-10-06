@@ -40,6 +40,19 @@ export function refreshCloudPanel(): void {
   impl?.refreshCloudPanelIfOpen();
 }
 
+/** True while the active tab is a file of a stock item (opened from the
+ *  item master, or saved onto an item): the toolbar's Save then writes it
+ *  back to that item instead of downloading a file. False until the cloud
+ *  panel has loaded, and whenever cloud features are not configured. */
+export function activeTabIsLinkedToItem(): boolean {
+  return impl?.activeTabIsLinkedToItem() ?? false;
+}
+
+/** Saves the active tab back to the item file it is linked to. */
+export function saveActiveTabToItem(): void {
+  impl?.saveActiveTabToItem();
+}
+
 /** Adds a "Cloud" button to the toolbar and lazily loads the real panel --
  *  a no-op if Supabase isn't configured, so an unconfigured/offline
  *  checkout shows no cloud UI at all rather than a broken one.

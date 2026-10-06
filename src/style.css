@@ -1467,3 +1467,9 @@ body[data-workspace="drawing"] #gl-canvas[hidden] ~ .feature-dialog {
   margin: 4px 0;
   color: #ffd400;
 }
+
+/* the parts library = the item master: an item, then its CAD files under it */
+.cloud-panel-item { margin-bottom: 4px; }
+.cloud-panel-item-name { font-weight: 600; }
+.cloud-panel-file-row { padding-left: 14px; }
+.cloud-panel-company { flex: 1; min-width: 0; }

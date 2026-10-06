@@ -1,131 +1,162 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-interface FakeError {
-  message: string;
-  code?: string;
+interface FakeResult {
+  data: unknown;
+  error: { message: string } | null;
 }
 
-interface FakeResult<T> {
-  data: T | null;
-  error: FakeError | null;
-}
-
-/** Same chainable-and-thenable Postgrest stand-in as io/cloudDrawings.test.ts. */
-function makeChain<T>(result: FakeResult<T>) {
+/** A chainable-and-thenable Postgrest stand-in: every builder method returns
+ *  the builder, and awaiting it resolves to the configured {data, error}. */
+function makeChain(result: FakeResult) {
   const builder = {
     select: () => builder,
     order: () => builder,
     eq: () => builder,
-    insert: () => builder,
-    update: () => builder,
-    delete: () => builder,
-    single: () => builder,
-    then<TResult1 = FakeResult<T>, TResult2 = never>(
-      onfulfilled?: ((value: FakeResult<T>) => TResult1 | PromiseLike<TResult1>) | null,
-      onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
-    ): PromiseLike<TResult1 | TResult2> {
-      return Promise.resolve(result).then(onfulfilled, onrejected);
+    range: () => builder,
+    maybeSingle: () => builder,
+    then<A = FakeResult, B = never>(ok?: ((v: FakeResult) => A | PromiseLike<A>) | null, bad?: ((r: unknown) => B | PromiseLike<B>) | null): PromiseLike<A | B> {
+      return Promise.resolve(result).then(ok, bad);
     },
   };
   return builder;
 }
 
-const mockFrom = vi.fn();
+/** What each table answers; a test sets the rows it needs. */
+const tables: Record<string, FakeResult> = {};
+const mockInvoke = vi.fn();
+const mockGetUser = vi.fn();
 
 vi.mock("../lib/supabaseClient", () => ({
-  getSupabaseClient: () => ({ from: mockFrom }),
+  getSupabaseClient: () => ({
+    from: (table: string) => makeChain(tables[table] ?? { data: [], error: null }),
+    functions: { invoke: mockInvoke },
+    auth: { getUser: mockGetUser },
+  }),
 }));
 
-const { listParts, fetchPart, createPart, renamePart, deletePart } = await import("./cloudParts");
+const { listParts, fetchPart, createPart, listItems, listItemFiles, fetchItemFile, saveItemFile, pickCompany, itemLabel, partLabel } = await import("./cloudParts");
+
+const ACME = { id: "co-1", name: "Micro Components" };
+const BRACKET = { id: "item-1", code: "101027520", name: "L Bracket" };
+const WASHER = { id: "item-2", code: null, name: "Washer" };
 
 beforeEach(() => {
-  mockFrom.mockReset();
+  for (const k of Object.keys(tables)) delete tables[k];
+  mockInvoke.mockReset();
+  mockGetUser.mockReset();
+  mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } } });
+  tables["companies"] = { data: [ACME], error: null };
+  tables["stock_items"] = { data: [BRACKET, WASHER], error: null };
+  tables["item_cad_files"] = {
+    data: [
+      { id: "f-1", item_id: "item-1", name: "Part", updated_at: "2026-10-06T00:00:00Z" },
+      { id: "f-2", item_id: "item-1", name: "Drawing", updated_at: "2026-10-06T00:00:00Z" },
+      { id: "f-3", item_id: "item-2", name: "Part", updated_at: "2026-10-06T00:00:00Z" },
+      { id: "f-9", item_id: "item-gone", name: "Part", updated_at: "2026-10-06T00:00:00Z" }, // its item is inactive: not listed
+    ],
+    error: null,
+  };
 });
 
-describe("listParts", () => {
-  it("maps rows to CloudPartSummary[]", async () => {
-    mockFrom.mockReturnValue(
-      makeChain({
-        data: [
-          { id: "1", name: "Bracket" },
-          { id: "2", name: "Washer" },
-        ],
-        error: null,
-      }),
-    );
+describe("labels", () => {
+  it("an item is its part number and name; a part is the part number (or the name) and the file", () => {
+    expect(itemLabel(BRACKET)).toBe("101027520 — L Bracket");
+    expect(itemLabel(WASHER)).toBe("Washer");
+    expect(partLabel(BRACKET, "Drawing")).toBe("101027520 / Drawing");
+    expect(partLabel(WASHER, "Part")).toBe("Washer / Part");
+  });
+});
 
+describe("pickCompany", () => {
+  it("takes the first when nothing is remembered, and none when there are none", () => {
+    expect(pickCompany([ACME, { id: "co-2", name: "Vinay Enterprises" }], "user-1")).toEqual(ACME);
+    expect(pickCompany([], "user-1")).toBeNull();
+  });
+});
+
+describe("the item master as the library", () => {
+  it("lists the company's items and their files", async () => {
+    expect(await listItems("co-1")).toEqual({ ok: true, value: [BRACKET, WASHER] });
+    const files = await listItemFiles("co-1");
+    expect(files.ok && files.value[0]).toEqual({ id: "f-1", itemId: "item-1", name: "Part", updatedAt: "2026-10-06T00:00:00Z" });
+  });
+
+  it("listParts names every file by its item, and leaves out a file whose item is not listed", async () => {
     const result = await listParts();
     expect(result).toEqual({
       ok: true,
       value: [
-        { id: "1", name: "Bracket" },
-        { id: "2", name: "Washer" },
+        { id: "f-2", name: "101027520 / Drawing" },
+        { id: "f-1", name: "101027520 / Part" },
+        { id: "f-3", name: "Washer / Part" },
       ],
     });
-    expect(mockFrom).toHaveBeenCalledWith("parts");
   });
 
-  it("treats a null data response as an empty list", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: null, error: null }));
-    expect(await listParts()).toEqual({ ok: true, value: [] });
-  });
-});
-
-describe("fetchPart", () => {
-  it("validates the jsonb document column the same way a local file is validated", async () => {
-    mockFrom.mockReturnValue(
-      makeChain({
-        data: { id: "1", name: "Bracket", document: { entities: [{ type: "circle" }], constraints: [] } },
-        error: null,
-      }),
-    );
-
-    const result = await fetchPart("1");
-    expect(result).toEqual({
-      ok: true,
-      value: { id: "1", name: "Bracket", snapshot: { entities: [{ type: "circle" }], constraints: [] } },
-    });
-  });
-
-  it("rejects a malformed document payload", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: { id: "1", name: "Bad", document: "not an object" }, error: null }));
-    const result = await fetchPart("1");
+  it("listParts says to sign in when nobody is", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: null } });
+    const result = await listParts();
     expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/Sign in/);
+  });
+
+  it("passes a table error through", async () => {
+    tables["stock_items"] = { data: null, error: { message: "network down" } };
+    expect(await listItems("co-1")).toEqual({ ok: false, error: "network down" });
   });
 });
 
-describe("createPart", () => {
-  it("returns the new row's id/name on success", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: { id: "new-id", name: "Bracket" }, error: null }));
-    const result = await createPart("Bracket", { entities: [], constraints: [] });
-    expect(result).toEqual({ ok: true, value: { id: "new-id", name: "Bracket" } });
+describe("fetching a file", () => {
+  it("returns its drawing, validated like a local .jcad", async () => {
+    tables["item_cad_files"] = {
+      data: { id: "f-1", company_id: "co-1", item_id: "item-1", name: "Part", updated_at: "t", document: { entities: [{ type: "line" }], constraints: [] } },
+      error: null,
+    };
+    const file = await fetchItemFile("f-1");
+    expect(file.ok && file.value).toMatchObject({ id: "f-1", companyId: "co-1", itemId: "item-1", name: "Part", snapshot: { entities: [{ type: "line" }] } });
+    const part = await fetchPart("f-1");
+    expect(part.ok && part.value.snapshot.entities).toHaveLength(1);
   });
 
-  it("translates a unique-constraint violation into a friendly 'already exists' error", async () => {
-    mockFrom.mockReturnValue(
-      makeChain({ data: null, error: { code: "23505", message: 'duplicate key value violates unique constraint "parts_owner_id_name_key"' } }),
-    );
-    const result = await createPart("Bracket", { entities: [], constraints: [] });
-    expect(result).toEqual({ ok: false, error: 'A part named "Bracket" already exists' });
-  });
-
-  it("surfaces any other error message unchanged", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: null, error: { message: "network error" } }));
-    const result = await createPart("Bracket", { entities: [], constraints: [] });
-    expect(result).toEqual({ ok: false, error: "network error" });
+  it("says so when the file is gone", async () => {
+    tables["item_cad_files"] = { data: null, error: null };
+    const file = await fetchItemFile("f-x");
+    expect(file.ok).toBe(false);
   });
 });
 
-describe("renamePart / deletePart", () => {
-  it("resolve ok on success", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: null, error: null }));
-    expect(await renamePart("1", "New name")).toEqual({ ok: true, value: undefined });
-    expect(await deletePart("1")).toEqual({ ok: true, value: undefined });
+describe("saving onto an item", () => {
+  const snapshot = { entities: [], constraints: [] };
+
+  it("goes through the cad function: a new file without an id, a save-over with it", async () => {
+    mockInvoke.mockResolvedValue({ data: { ok: true, value: { id: "f-7", item_id: "item-1", name: "Flat", updated_at: "t" } }, error: null });
+    const made = await saveItemFile({ companyId: "co-1", itemId: "item-1", name: "Flat", snapshot });
+    expect(made).toEqual({ ok: true, value: { id: "f-7", itemId: "item-1", name: "Flat", updatedAt: "t" } });
+    expect(mockInvoke).toHaveBeenLastCalledWith("cad", { body: { action: "item-file-save", companyId: "co-1", itemId: "item-1", name: "Flat", document: snapshot } });
+
+    await saveItemFile({ companyId: "co-1", itemId: "item-1", id: "f-7", name: "Flat", snapshot });
+    expect(mockInvoke).toHaveBeenLastCalledWith("cad", { body: { action: "item-file-save", companyId: "co-1", itemId: "item-1", id: "f-7", name: "Flat", document: snapshot } });
   });
 
-  it("translates a rename's unique-constraint violation the same way create does", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: null, error: { code: "23505", message: "duplicate key" } }));
-    const result = await renamePart("1", "Washer");
-    expect(result).toEqual({ ok: false, error: 'A part named "Washer" already exists' });
+  it("shows the server's own refusal", async () => {
+    mockInvoke.mockResolvedValue({ data: { ok: false, message: 'This item already has a file named "Part"' }, error: null });
+    expect(await saveItemFile({ companyId: "co-1", itemId: "item-1", name: "Part", snapshot })).toEqual({ ok: false, error: 'This item already has a file named "Part"' });
+  });
+
+  it("Save to Library by name: '<part no.> / <file>' finds the item; a bare part number saves a file called Part", async () => {
+    mockInvoke.mockResolvedValue({ data: { ok: true, value: { id: "f-8", item_id: "item-1", name: "Flat pattern", updated_at: "t" } }, error: null });
+    const result = await createPart("101027520 / Flat pattern", snapshot);
+    expect(result).toEqual({ ok: true, value: { id: "f-8", name: "101027520 / Flat pattern" } });
+    expect(mockInvoke.mock.calls[0]?.[1]).toMatchObject({ body: { itemId: "item-1", name: "Flat pattern" } });
+
+    await createPart("washer", snapshot); // by item name, any case
+    expect(mockInvoke.mock.calls[1]?.[1]).toMatchObject({ body: { itemId: "item-2", name: "Part" } });
+  });
+
+  it("an item that does not exist is not made here: it says to create it in MinimalERP", async () => {
+    const result = await createPart("NO-SUCH / Part", snapshot);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/create it in MinimalERP/);
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 });

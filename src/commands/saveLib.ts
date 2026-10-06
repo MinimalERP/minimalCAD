@@ -74,7 +74,7 @@ export class SaveLibCommand extends BaseCommand {
       this.scopeNote = "whole drawing";
     }
 
-    this.commandBar.setStatus("SAVE TO LIBRARY", `Name: (${this.scopeNote})`);
+    this.commandBar.setStatus("SAVE TO LIBRARY", `Item part no. / file name: (${this.scopeNote})`);
     this.commandBar.enableInput("text");
   }
 

@@ -26,7 +26,7 @@ import {
 } from "../io/saveLoad";
 import { parseEntities, placeBeside } from "../core/document";
 import { showToast } from "./toast";
-import { initCloudUi } from "./cloudPanel";
+import { initCloudUi, activeTabIsLinkedToItem, saveActiveTabToItem } from "./cloudPanel";
 import { drawIcon } from "./toolIcons";
 import type { Workspace } from "../engine/session";
 
@@ -399,7 +399,17 @@ function buildFileMenu(
   };
 
   const canSaveOpen: Workspace[] = ["drafting", "model", "drawing"];
+  // A tab that is a stock item's file (opened from MinimalERP's item master, see ui/cloudPanelImpl.ts) is saved back to that
+  // item; any other tab is saved as a file on this computer, as always. "Save to PC" is the file download whichever it is.
   addItem("Save", canSaveOpen, () => {
+    if (activeTabIsLinkedToItem()) {
+      saveActiveTabToItem();
+      return;
+    }
+    const filename = promptFilename("Save Drawing", "jcad");
+    if (filename !== null) saveDocumentToFile(getActiveEngine().document, filename);
+  });
+  addItem("Save to PC", canSaveOpen, () => {
     const filename = promptFilename("Save Drawing", "jcad");
     if (filename !== null) saveDocumentToFile(getActiveEngine().document, filename);
   });

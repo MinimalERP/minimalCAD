@@ -31,9 +31,10 @@ function makeChain<T>(result: FakeResult<T>) {
 }
 
 const mockFrom = vi.fn();
+const mockInvoke = vi.fn();
 
 vi.mock("../lib/supabaseClient", () => ({
-  getSupabaseClient: () => ({ from: mockFrom }),
+  getSupabaseClient: () => ({ from: mockFrom, functions: { invoke: mockInvoke } }),
 }));
 
 // Imported after the mock so cloudDrawings.ts picks up the mocked module.
@@ -43,6 +44,7 @@ const { listDrawings, fetchDrawing, createDrawing, updateDrawing, renameDrawing,
 
 beforeEach(() => {
   mockFrom.mockReset();
+  mockInvoke.mockReset();
 });
 
 describe("listDrawings", () => {
@@ -65,7 +67,7 @@ describe("listDrawings", () => {
         { id: "2", name: "Plate", updatedAt: "2026-01-01T00:00:00Z" },
       ],
     });
-    expect(mockFrom).toHaveBeenCalledWith("drawings");
+    expect(mockFrom).toHaveBeenCalledWith("cad_drawings");
   });
 
   it("returns an error result (never throws) when the query fails", async () => {
@@ -122,29 +124,29 @@ describe("fetchDrawing", () => {
   });
 });
 
-describe("createDrawing", () => {
-  it("returns the new row's id/name/updatedAt on success", async () => {
-    mockFrom.mockReturnValue(
-      makeChain({ data: { id: "new-id", name: "Untitled", updated_at: "2026-01-03T00:00:00Z" }, error: null }),
-    );
-    const result = await createDrawing("Untitled", { entities: [], constraints: [] });
-    expect(result).toEqual({ ok: true, value: { id: "new-id", name: "Untitled", updatedAt: "2026-01-03T00:00:00Z" } });
-  });
-});
+describe("writes go through the cad function, never to the table", () => {
+  const snapshot = { entities: [], constraints: [] };
 
-describe("updateDrawing / renameDrawing / deleteDrawing", () => {
-  it("resolve ok on success", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: null, error: null }));
-    expect(await updateDrawing("1", { entities: [], constraints: [] })).toEqual({ ok: true, value: undefined });
+  it("createDrawing returns the new row's id/name/updatedAt", async () => {
+    mockInvoke.mockResolvedValue({ data: { ok: true, value: { id: "new-id", name: "Untitled", updated_at: "2026-01-03T00:00:00Z" } }, error: null });
+    const result = await createDrawing("Untitled", snapshot);
+    expect(result).toEqual({ ok: true, value: { id: "new-id", name: "Untitled", updatedAt: "2026-01-03T00:00:00Z" } });
+    expect(mockInvoke).toHaveBeenCalledWith("cad", { body: { action: "drawing-save", name: "Untitled", document: snapshot } });
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it("update / rename / delete resolve ok, each with its own action", async () => {
+    mockInvoke.mockResolvedValue({ data: { ok: true, value: {} }, error: null });
+    expect(await updateDrawing("1", snapshot)).toEqual({ ok: true, value: undefined });
     expect(await renameDrawing("1", "New name")).toEqual({ ok: true, value: undefined });
     expect(await deleteDrawing("1")).toEqual({ ok: true, value: undefined });
+    expect(mockInvoke.mock.calls.map((c) => (c[1] as { body: { action: string } }).body.action)).toEqual(["drawing-save", "drawing-rename", "drawing-delete"]);
   });
 
-  it("surface the underlying error message on failure", async () => {
-    mockFrom.mockReturnValue(makeChain({ data: null, error: { message: "permission denied" } }));
-    expect(await updateDrawing("1", { entities: [], constraints: [] })).toEqual({
-      ok: false,
-      error: "permission denied",
-    });
+  it("a refusal from the server is the error shown; so is not reaching it", async () => {
+    mockInvoke.mockResolvedValue({ data: { ok: false, message: "That drawing no longer exists" }, error: null });
+    expect(await updateDrawing("1", snapshot)).toEqual({ ok: false, error: "That drawing no longer exists" });
+    mockInvoke.mockResolvedValue({ data: null, error: { message: "Failed to fetch" } });
+    expect(await deleteDrawing("1")).toEqual({ ok: false, error: "Failed to fetch" });
   });
 });

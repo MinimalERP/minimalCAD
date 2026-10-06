@@ -2,15 +2,14 @@
  * MinimalCAD Web
  * io/cloudDrawings.ts
  *
- * Thin data-access layer over the `drawings` table (see
- * supabase/migrations/0001_drawings.sql) -- create/list/fetch/rename/delete
- * a cloud drawing, and save the current Document to one. Every call is
- * scoped to the signed-in user purely by Row Level Security (see the
- * migration's policies): this layer never filters by user id itself, it
- * relies entirely on Postgres rejecting/hiding rows that aren't the
- * caller's, matching "never trust the client" -- the same reason
- * `owner_id` isn't set explicitly on insert either (the column's own
- * `default auth.uid()` handles it server-side).
+ * Thin data-access layer over the `cad_drawings` table of the MinimalERP
+ * database this app shares (its migration 20261026000100_cad.sql) --
+ * create/list/fetch/rename/delete a person's own cloud drawing, and save
+ * the current Document to one. Reads are scoped to the signed-in user
+ * purely by Row Level Security: this layer never filters by user id
+ * itself, it relies on Postgres hiding rows that aren't the caller's.
+ * Writes go through the "cad" Edge Function (io/cloudApi.ts), which acts
+ * as the signed-in person -- a browser cannot write the table at all.
  *
  * Returns a Result-shaped value (never throws) so UI code can show a toast
  * on failure the same way io/saveLoad.ts's local Open already does for a
@@ -18,6 +17,7 @@
  */
 
 import { getSupabaseClient } from "../lib/supabaseClient";
+import { callCad } from "./cloudApi";
 import { validateDocumentSnapshot } from "./fileFormat";
 import type { DocumentSnapshot } from "../core/document";
 
@@ -49,8 +49,9 @@ function describeError(error: { message: string } | null): string {
  *  user's drawings and nothing else. */
 export async function listDrawings(): Promise<CloudResult<CloudDrawingSummary[]>> {
   const { data, error } = await getSupabaseClient()
-    .from("drawings")
+    .from("cad_drawings")
     .select("id, name, updated_at")
+    .eq("is_autosave", false) // the autosave slot is io/autosave.ts's, not a drawing to list
     .order("updated_at", { ascending: false });
 
   if (error) return { ok: false, error: describeError(error) };
@@ -64,7 +65,7 @@ export async function listDrawings(): Promise<CloudResult<CloudDrawingSummary[]>
  *  and could in principle hold anything a client wrote to it. */
 export async function fetchDrawing(id: string): Promise<CloudResult<CloudDrawing>> {
   const { data, error } = await getSupabaseClient()
-    .from("drawings")
+    .from("cad_drawings")
     .select("id, name, document, updated_at")
     .eq("id", id)
     .single();
@@ -78,39 +79,28 @@ export async function fetchDrawing(id: string): Promise<CloudResult<CloudDrawing
   return { ok: true, value: { id: row.id, name: row.name, snapshot: parsed.snapshot, updatedAt: row.updated_at } };
 }
 
-/** Creates a new cloud drawing from the current Document, returning its
- *  new id/name/updatedAt -- `owner_id` is left unset so the column's own
- *  `default auth.uid()` fills it in, and `format_version` is left at the
- *  table's default (1), mirroring io/fileFormat.ts's CURRENT_VERSION. */
+/** Creates a new cloud drawing from the current Document. Like every
+ *  change, it goes through the "cad" Edge Function (see io/cloudApi.ts):
+ *  the database lets a browser read its own drawings, never write them. */
 export async function createDrawing(name: string, snapshot: DocumentSnapshot): Promise<CloudResult<CloudDrawingSummary>> {
-  const { data, error } = await getSupabaseClient()
-    .from("drawings")
-    .insert({ name, document: snapshot })
-    .select("id, name, updated_at")
-    .single();
-
-  if (error) return { ok: false, error: describeError(error) };
-  const row = data as Pick<DrawingRow, "id" | "name" | "updated_at">;
-  return { ok: true, value: { id: row.id, name: row.name, updatedAt: row.updated_at } };
+  const result = await callCad<{ id: string; name: string; updated_at: string }>("drawing-save", { name, document: snapshot });
+  if (!result.ok) return result;
+  return { ok: true, value: { id: result.value.id, name: result.value.name, updatedAt: result.value.updated_at } };
 }
 
 /** Overwrites an existing drawing's document -- last-write-wins, same
- *  whole-document-replace model as local Open/Save already use (no partial
- *  entity-level diffing either locally or here). */
+ *  whole-document-replace model as local Open/Save already use. */
 export async function updateDrawing(id: string, snapshot: DocumentSnapshot): Promise<CloudResult<void>> {
-  const { error } = await getSupabaseClient().from("drawings").update({ document: snapshot }).eq("id", id);
-  if (error) return { ok: false, error: describeError(error) };
-  return { ok: true, value: undefined };
+  const result = await callCad<unknown>("drawing-save", { id, document: snapshot });
+  return result.ok ? { ok: true, value: undefined } : result;
 }
 
 export async function renameDrawing(id: string, name: string): Promise<CloudResult<void>> {
-  const { error } = await getSupabaseClient().from("drawings").update({ name }).eq("id", id);
-  if (error) return { ok: false, error: describeError(error) };
-  return { ok: true, value: undefined };
+  const result = await callCad<unknown>("drawing-rename", { id, name });
+  return result.ok ? { ok: true, value: undefined } : result;
 }
 
 export async function deleteDrawing(id: string): Promise<CloudResult<void>> {
-  const { error } = await getSupabaseClient().from("drawings").delete().eq("id", id);
-  if (error) return { ok: false, error: describeError(error) };
-  return { ok: true, value: undefined };
+  const result = await callCad<unknown>("drawing-delete", { id });
+  return result.ok ? { ok: true, value: undefined } : result;
 }

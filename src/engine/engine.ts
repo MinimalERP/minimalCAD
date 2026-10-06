@@ -127,7 +127,15 @@ export class Engine {
   clearCloudDrawing(): void {
     this.cloudDrawingId = null;
     this.cloudDrawingName = "Untitled";
+    this.itemFile = null;
   }
+
+  /** The stock item CAD file (io/cloudParts.ts -- a file on an item of the
+   *  MinimalERP item master) this tab was opened from or last saved to, or
+   *  null. While set, Save writes this tab back to that file, so the item in
+   *  MinimalERP always has what was saved here. Cleared with the cloud
+   *  drawing identity above, for the same reason. */
+  itemFile: { id: string; companyId: string; itemId: string; itemLabel: string; name: string } | null = null;
 
   constructor(
     viewport: Viewport,
