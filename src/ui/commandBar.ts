@@ -48,6 +48,11 @@ export class CommandBar extends EventTarget {
   // rather than popping up with an empty/meaningless reading immediately
   // on selecting the tool.
   private hasLiveValue = false;
+  // The field holds an existing label handed over for editing (see
+  // setTextToEdit()): its text is the user's own, so the overtype
+  // conveniences below (select-all on focus/click, clear on first key) must
+  // leave it alone.
+  private editingText = false;
 
   // Live-filtering suggestion popup (ui/command_bar.py's suggestions_list),
   // used by commands/insertLib.ts. Owned entirely here, same as every other
@@ -202,6 +207,7 @@ export class CommandBar extends EventTarget {
     this.inputField.inputMode = mode === "text" ? "text" : "none";
     this.inputField.focus();
     this.fieldLocked = false;
+    this.editingText = false;
     this.hasLiveValue = false;
     // Lets a touch-only numeric keypad overlay show/hide itself purely off
     // this, with no separate device/mode tracking of its own -- see
@@ -234,6 +240,16 @@ export class CommandBar extends EventTarget {
 
   setValue(text: string): void {
     this.inputField.value = text;
+  }
+
+  /** Puts an existing text in the field to be EDITED rather than overtyped
+   *  (commands/editText.ts): the caret goes to the end, a click places it
+   *  anywhere, and typing adds to the text. Call after enableInput(). */
+  setTextToEdit(text: string): void {
+    this.inputField.value = text;
+    this.fieldLocked = true;
+    this.editingText = true;
+    this.inputField.setSelectionRange(text.length, text.length);
   }
 
   setReady(): void {
@@ -393,12 +409,15 @@ export class CommandBar extends EventTarget {
     // value instead of landing a caret mid-text. Deferred via setTimeout(0) so the
     // browser's own click-driven cursor placement resolves first, then gets
     // overridden -- the JS equivalent of QTimer.singleShot(0, selectAll).
+    const selectAll = () => {
+      if (!(field === this.inputField && this.editingText)) field.select();
+    };
     field.addEventListener("focus", () => {
-      setTimeout(() => field.select(), SELECT_DEFER_MS);
+      setTimeout(selectAll, SELECT_DEFER_MS);
       this.renderTooltip(); // updates which field the floating mirror highlights
     });
     field.addEventListener("mousedown", () => {
-      setTimeout(() => field.select(), SELECT_DEFER_MS);
+      setTimeout(selectAll, SELECT_DEFER_MS);
     });
 
     field.addEventListener("input", () => {

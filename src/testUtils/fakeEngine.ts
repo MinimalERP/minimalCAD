@@ -24,6 +24,7 @@ function makeFakeCommandBar(): CommandBar {
     clear: () => {},
     text: () => "",
     setValue: () => {},
+    setTextToEdit: () => {},
     setReady: () => {},
     enableDualInput: () => {},
     disableDualInput: () => {},

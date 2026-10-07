@@ -57,7 +57,7 @@ export class EditTextCommand extends BaseCommand implements GripCommand {
     const current = entity instanceof Dimension ? entity.getDisplayText() : entity.text;
     this.commandBar.setStatus("EDIT TEXT", "Edit text, Enter to apply");
     this.commandBar.enableInput("text");
-    this.commandBar.setValue(current);
+    this.commandBar.setTextToEdit(current);
   }
 
   textInput(text: string): void {
