@@ -61,6 +61,7 @@ let cloudIconCanvas: HTMLCanvasElement | null = null;
 // and itemFile) rather than as module state here.
 let getActiveEngineRef: (() => Engine) | null = null;
 let requestRedrawRef: (() => void) | null = null;
+let documentOpenedRef: (() => void) | null = null;
 
 // Same cyan as #command-bar .prompt-label in style.css (the "READY"/status
 // text color) -- reused here, not redefined independently, so the Cloud
@@ -99,9 +100,10 @@ export function saveActiveTabToItem(): void {
  *  panel. Called by cloudPanel.ts's shim only after it has already
  *  confirmed Supabase is configured -- see this module's own header
  *  comment for why that check lives there instead of here. */
-export function mountCloudUi(toolbarRoot: HTMLElement, getActiveEngine: () => Engine, requestRedraw: () => void): void {
+export function mountCloudUi(toolbarRoot: HTMLElement, getActiveEngine: () => Engine, requestRedraw: () => void, documentOpened: () => void = () => {}): void {
   getActiveEngineRef = getActiveEngine;
   requestRedrawRef = requestRedraw;
+  documentOpenedRef = documentOpened;
 
   const gapEl = document.createElement("div");
   gapEl.className = "toolbar-gap";
@@ -448,6 +450,7 @@ function buildDrawingRow(engine: Engine, drawing: CloudDrawingSummary): HTMLElem
       engine.cloudDrawingId = result.value.id;
       engine.cloudDrawingName = result.value.name;
       engine.setTitle(result.value.name);
+      documentOpenedRef?.();
       requestRedrawRef!();
       render();
       if (parseResult.skippedCount > 0) {
@@ -721,6 +724,7 @@ function openItemFile(engine: Engine, fileId: string, label: string | undefined)
       name: file.name,
     };
     engine.setTitle(`${engine.itemFile.itemLabel} / ${file.name}`);
+    documentOpenedRef?.();
     requestRedrawRef?.();
     if (panelEl !== null && !panelEl.hidden) render();
     showToast(`Opened ${engine.itemFile.itemLabel} / ${file.name}. Save writes it back to the item.`);
@@ -779,24 +783,30 @@ function insertItemFile(engine: Engine, fileId: string): void {
 }
 
 /**
- * "Save here" on an item: a new file on it. The whole drawing is saved and
- * the tab becomes that file (so the next Save writes back to it) -- unless
- * something is selected, when only the selection is saved (the desktop
- * app's Save to Library rule) and the tab stays what it was.
+ * "Save here" on an item: a new file on it. The whole tab is saved -- a 2D
+ * drawing, a 3D model, or a drawing sheet with the model it shows -- and
+ * the tab becomes that file (so the next Save writes back to it). Only in a
+ * plain 2D drawing, when something is selected, the selection alone is
+ * saved (the desktop app's Save to Library rule) and the tab stays what it
+ * was: a model or a sheet is never cut down to a selection.
  */
 function saveOntoItem(engine: Engine, item: LibraryItem): void {
   const of = company;
   if (of === null) return;
 
+  const doc = engine.document;
+  const isSheet = doc.sheets !== undefined;
+  const isModel = doc.part !== undefined;
   const selected = engine.selection.getEntities();
-  const selectionOnly = selected.length > 0;
-  if (!selectionOnly && engine.document.getEntities().length === 0) {
+  const selectionOnly = selected.length > 0 && !isSheet && !isModel;
+  if (!selectionOnly && !isSheet && !isModel && doc.getEntities().length === 0) {
     showToast("Nothing to save -- the drawing is empty.");
     return;
   }
 
   const taken = new Set(cachedFiles.filter((f) => f.itemId === item.id).map((f) => f.name));
-  const suggested = taken.has("Part") ? "Drawing" : "Part";
+  const wanted = isSheet ? "Drawing" : isModel ? "3D model" : "Part";
+  const suggested = taken.has(wanted) ? (wanted === "Part" ? "Drawing" : `${wanted} 2`) : wanted;
   const typed = window.prompt(`File name on ${itemLabel(item)}${selectionOnly ? ` (${selected.length} selected)` : ""}`, suggested);
   if (typed === null) return;
   const name = typed.trim();

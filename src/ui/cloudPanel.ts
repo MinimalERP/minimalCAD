@@ -57,12 +57,14 @@ export function saveActiveTabToItem(): void {
  *  a no-op if Supabase isn't configured, so an unconfigured/offline
  *  checkout shows no cloud UI at all rather than a broken one.
  *  `getActiveEngine` is called fresh on every use (never cached as one fixed
- *  Engine) so the panel always acts on whichever tab is currently active. */
-export function initCloudUi(toolbarRoot: HTMLElement, getActiveEngine: () => Engine, requestRedraw: () => void): void {
+ *  Engine) so the panel always acts on whichever tab is currently active.
+ *  `documentOpened` runs after a file has been loaded into the tab (it may
+ *  be a 3D model or a drawing sheet, which changes the tab's workspace). */
+export function initCloudUi(toolbarRoot: HTMLElement, getActiveEngine: () => Engine, requestRedraw: () => void, documentOpened: () => void = () => {}): void {
   if (!isSupabaseConfigured()) return;
 
   void import("./cloudPanelImpl").then((mod) => {
     impl = mod;
-    mod.mountCloudUi(toolbarRoot, getActiveEngine, requestRedraw);
+    mod.mountCloudUi(toolbarRoot, getActiveEngine, requestRedraw, documentOpened);
   });
 }

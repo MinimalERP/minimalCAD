@@ -279,13 +279,14 @@ export function buildToolbar(
 
   // Cloud UI mounts once into its own group (mounting it twice isn't safe).
   const cloud = group(root, "ws-group");
-  initCloudUi(cloud, getActiveEngine, requestRedraw);
+  // A file opened from the cloud / an item may be a 3D model or a drawing sheet: the tab's workspace follows it.
+  initCloudUi(cloud, getActiveEngine, requestRedraw, () => host.documentChanged());
 
   const visible: Record<Workspace, HTMLElement[]> = {
     drafting: [switcher, drafting, cloud],
     model: [switcher, model, cloud],
     sketch: [sketchBanner, sketch],
-    drawing: [drawingBanner, drawing],
+    drawing: [drawingBanner, drawing, cloud],
   };
   const all = [switcher, sketchBanner, drafting, model, sketch, drawingBanner, drawing, cloud];
 
