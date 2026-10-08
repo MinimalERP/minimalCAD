@@ -228,6 +228,10 @@ describe("params + rebuild", () => {
     expect(parsed?.features).toHaveLength(1);
     expect(parsed?.sketches[0]!.entities).toHaveLength(4);
     expect(parsePart("nope")).toBeNull();
+    // what the eye in the Model list hid or showed is kept -- for the planes and sketches the part still has
+    const eyed = parsePart(JSON.parse(JSON.stringify({ ...part, shown: { Drawing: false, [part.sketches[0]?.id ?? "x"]: true, Gone: false, Odd: "yes" } })));
+    expect(eyed?.shown).toEqual(part.sketches[0] ? { Drawing: false, [part.sketches[0].id]: true } : { Drawing: false });
+    expect(parsed?.shown).toBeUndefined();
   });
 });
 

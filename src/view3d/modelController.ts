@@ -225,24 +225,36 @@ export class ModelController {
     this.view.setBodies(this.result.bodies);
     this.showWireframes(part);
     this.view.setWorkPlanes(
-      [...this.result.planes.values()].flatMap((p) => (p.frame === null ? [] : [{ key: p.id, frame: p.frame, hingeAt: p.hingeAt, centerAt: p.centerAt }])),
+      [...this.result.planes.values()].flatMap((p) =>
+        p.frame === null || part.shown?.[p.id] === false ? [] : [{ key: p.id, frame: p.frame, hingeAt: p.hingeAt, centerAt: p.centerAt }],
+      ),
     );
     this.view.updateOriginScale();
     this.renderBrowser(part);
   }
 
-  /** The 2D drawing is always shown on the XY ground (it IS the model
-   *  space); other sketches only until a feature consumes them. */
+  /** Sketches a feature was made from: not drawn unless asked for (a sheet shown flat keeps its sketch: the bend lines on the blank). */
+  private usedSketches(part: PartData): Set<string> {
+    return new Set(part.features.filter(usesSketch).filter((f) => !(f.type === "sheet" && f.flat === true)).map((f) => f.sketch));
+  }
+
+  /** Whether a work plane, a sketch or the 2D drawing is drawn in 3D: the eye's choice, else as usual. */
+  private isShown(part: PartData, id: string, used: ReadonlySet<string> = this.usedSketches(part)): boolean {
+    return part.shown?.[id] ?? (id === DRAWING_SKETCH || !used.has(id));
+  }
+
+  /** The 2D drawing is shown on the XY ground (it IS the model space), other
+   *  sketches only until a feature consumes them -- unless the eye in the
+   *  Model list says otherwise. A command that needs a sketch shows it anyway. */
   private showWireframes(part: PartData, alsoShow: ReadonlySet<string> = new Set()): void {
-    // A sheet shown flat keeps its sketch visible: the bend lines on the blank.
-    const used = new Set(part.features.filter(usesSketch).filter((f) => !(f.type === "sheet" && f.flat === true)).map((f) => f.sketch));
+    const used = this.usedSketches(part);
     const list: { frame: Frame; polylines: Point[][] }[] = [];
     const drawing = this.result?.sketches.get(DRAWING_SKETCH);
-    if (drawing !== undefined) {
+    if (drawing !== undefined && (this.isShown(part, DRAWING_SKETCH, used) || alsoShow.has(DRAWING_SKETCH))) {
       list.push({ frame: drawing.frame, polylines: entityPolylines(this.host.getEngine().document.entities) });
     }
     for (const s of part.sketches) {
-      if (used.has(s.id) && !alsoShow.has(s.id)) continue;
+      if (!this.isShown(part, s.id, used) && !alsoShow.has(s.id)) continue;
       const geo = this.result?.sketches.get(s.id);
       if (geo === undefined) continue;
       list.push({ frame: geo.frame, polylines: entityPolylines(geo.entities) }); // as rebuilt: constraints applied
@@ -465,21 +477,25 @@ export class ModelController {
       p.planes = p.planes.filter((x) => x.id !== id);
       p.sketches = p.sketches.filter((s) => s.id !== id);
       p.features = p.features.filter((f) => f.id !== id);
+      if (p.shown !== undefined) delete p.shown[id];
     });
   }
 
-  /** Hide / show a feature: the model is rebuilt without / with it. */
+  /** Hide / show a row of the Model list. A feature: the model is rebuilt without / with it. A work plane, a
+   *  sketch or the 2D drawing: it is only not drawn in 3D -- what was built on it stays. */
   private toggleHidden(id: string): void {
     this.cancel();
     this.commit((p) => {
       const f = p.features.find((x) => x.id === id);
       if (f !== undefined) f.suppressed = f.suppressed !== true;
+      else p.shown = { ...p.shown, [id]: !this.isShown(p, id) };
     });
   }
 
   private renderBrowser(part: PartData): void {
     const el = this.browserEl;
     el.innerHTML = "";
+    const usedSketches = this.usedSketches(part);
     const title = document.createElement("div");
     title.className = "mb-title";
     title.textContent = "Model";
@@ -512,31 +528,35 @@ export class ModelController {
       d.className = "mb-detail";
       d.textContent = detail;
       r.append(i, name, d);
-      // A feature can be hidden: the model is rebuilt without it (and shown again the same way).
+      // Every row can be hidden. A feature: the model is rebuilt without it (and shown again the same way).
+      // A work plane, a sketch or the 2D drawing: it is only not drawn in 3D.
       const feature = part.features.find((f) => f.id === id);
-      const isHidden = feature?.suppressed === true;
-      if (feature !== undefined) {
-        if (isHidden) {
-          r.classList.add("suppressed");
-          if (opts.error === undefined) r.title = "Hidden - the model is built without it. Click the eye to show it again";
+      const isHidden = feature !== undefined ? feature.suppressed === true : !this.isShown(part, id, usedSketches);
+      const what = feature !== undefined ? "feature" : part.planes.some((p) => p.id === id) ? "work plane" : id === DRAWING_SKETCH ? "drawing" : "sketch";
+      if (isHidden) {
+        // a sketch a feature was made from is not drawn anyway: only what the person hid themselves is marked
+        if (feature !== undefined) r.classList.add("suppressed");
+        else if (part.shown?.[id] === false) r.classList.add("unseen");
+        if (opts.error === undefined) {
+          r.title = feature !== undefined ? "Hidden - the model is built without it. Click the eye to show it again" : `Not shown in 3D - what was made from this ${what} is unchanged. Click the eye to show it`;
         }
-        const eye = document.createElement("span");
-        eye.className = "mb-eye";
-        eye.innerHTML = isHidden ? EYE_OFF_SVG : EYE_SVG;
-        eye.title = isHidden ? "Show this feature" : "Hide this feature";
-        eye.addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.toggleHidden(id);
-        });
-        eye.addEventListener("dblclick", (e) => e.stopPropagation());
-        r.appendChild(eye);
       }
+      const eye = document.createElement("span");
+      eye.className = "mb-eye";
+      eye.innerHTML = isHidden ? EYE_OFF_SVG : EYE_SVG;
+      eye.title = `${isHidden ? "Show" : "Hide"} this ${what}`;
+      eye.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleHidden(id);
+      });
+      eye.addEventListener("dblclick", (e) => e.stopPropagation());
+      r.appendChild(eye);
       r.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         this.selectedNode = id;
         for (const item of el.querySelectorAll<HTMLElement>(".mb-row")) item.classList.toggle("selected", item === r);
         const items: [string, () => void][] = [["Edit", onOpen]];
-        if (feature !== undefined) items.push([isHidden ? "Show" : "Hide", () => this.toggleHidden(id)]);
+        items.push([isHidden ? "Show" : "Hide", () => this.toggleHidden(id)]);
         if (id !== DRAWING_SKETCH) items.push(["Delete", () => this.deleteNode(id)]);
         showRowMenu(e.clientX, e.clientY, items);
       });

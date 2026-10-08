@@ -388,6 +388,10 @@ export interface PartData {
   planes: WorkPlane[];
   sketches: SketchData[];
   features: FeatureData[];
+  /** Whether a work plane, a sketch or the 2D drawing is drawn in the 3D view, by id -- only what the person
+   *  changed with the eye in the Model list (absent = as usual: planes and loose sketches shown, a sketch a
+   *  feature was made from not). Display only: nothing built on a hidden plane or sketch changes. */
+  shown?: Record<string, boolean>;
 }
 
 export function emptyPart(): PartData {
@@ -691,7 +695,11 @@ export function parsePart(raw: unknown): PartData | null {
   const features = Array.isArray(raw.features)
     ? raw.features.map(parseFeature).filter((f): f is FeatureData => f !== null)
     : [];
-  return { schema: PART_SCHEMA, units: "mm", parameters, planes, sketches, features };
+  const ids = new Set([DRAWING_SKETCH, ...planes.map((p) => p.id), ...sketches.map((s) => s.id)]);
+  const shown = isObject(raw.shown)
+    ? Object.fromEntries(Object.entries(raw.shown).filter((e): e is [string, boolean] => ids.has(e[0]) && typeof e[1] === "boolean"))
+    : {};
+  return { schema: PART_SCHEMA, units: "mm", parameters, planes, sketches, features, ...(Object.keys(shown).length > 0 ? { shown } : {}) };
 }
 
 /** Next free "Sketch001"-style id for `prefix`. Ids double as the names shown

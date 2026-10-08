@@ -995,8 +995,14 @@ body {
   visibility: hidden;
 }
 #model-browser .mb-row:hover .mb-eye,
-#model-browser .mb-row.suppressed .mb-eye {
+#model-browser .mb-row.suppressed .mb-eye,
+#model-browser .mb-row.unseen .mb-eye {
   visibility: visible;
+}
+/* A work plane, a sketch or the 2D drawing not drawn in 3D: the row a little dimmer -- not struck out, it is still in use. */
+#model-browser .mb-row.unseen .mb-name,
+#model-browser .mb-row.unseen .mb-icon {
+  opacity: 0.6;
 }
 #model-browser .mb-eye:hover {
   color: #ffffff;
