@@ -629,8 +629,8 @@ export class HoleCommand implements ModelCommand {
 
   /** On-model dimension graphics for every hole's dimensions. Built in mm
    *  (so arrowheads keep their size on a round face), drawn in face coords. */
-  private dimensionGraphics(): { id: string; segs: [Point, Point][]; labelAt: Point; text: string; selected: boolean }[] {
-    const out: { id: string; segs: [Point, Point][]; labelAt: Point; text: string; selected: boolean }[] = [];
+  private dimensionGraphics(): { id: string; segs: [Point, Point][]; labelAt: Point; along: [Point, Point]; text: string; selected: boolean }[] {
+    const out: { id: string; segs: [Point, Point][]; labelAt: Point; along: [Point, Point]; text: string; selected: boolean }[] = [];
     const solved = this.resolved();
     const arrow = this.ctx.view.pixelSize() * 9;
     const round = this.cyl() !== null;
@@ -681,6 +681,8 @@ export class HoleCommand implements ModelCommand {
           id: `${i}.${k}`,
           segs,
           labelAt: { x: (foot.x + q.x) / 2, y: (foot.y + q.y) / 2 },
+          // The way the dimension runs (kept even when its value is 0): the view sets the label off to its side.
+          along: [foot, Math.abs(dist) > 1e-9 ? q : { x: foot.x + line.n.x, y: foot.y + line.n.y }],
           text,
           selected: (sel?.kind === "dim" && sel.i === i && sel.k === k) || (sel?.kind === "hole" && sel.i === i),
         });

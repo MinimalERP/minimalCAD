@@ -253,7 +253,7 @@ export class ModelView {
   private dimGroup = new THREE.Group();
   private dimLayer: HTMLDivElement;
   private dimFrame: Surface | null = null;
-  private dimLabels: { id: string; at: Point; el: HTMLDivElement }[] = [];
+  private dimLabels: { id: string; at: Point; along: [Point, Point]; el: HTMLDivElement }[] = [];
   /** The value box currently open on a dimension (survives re-draws). */
   private dimEdit: { id: string; input: HTMLInputElement; finish: (ok: boolean) => void } | null = null;
   /** A dimension's value was clicked (to edit it / select it). */
@@ -638,7 +638,7 @@ export class ModelView {
    */
   setDimensions(
     frame: Surface | null,
-    dims: readonly { id: string; segs: [Point, Point][]; labelAt: Point; text: string; selected: boolean }[],
+    dims: readonly { id: string; segs: [Point, Point][]; labelAt: Point; along: [Point, Point]; text: string; selected: boolean }[],
   ): void {
     disposeChildren(this.dimGroup);
     this.dimLayer.innerHTML = "";
@@ -671,7 +671,7 @@ export class ModelView {
         el.appendChild(this.dimEdit.input);
       }
       this.dimLayer.appendChild(el);
-      this.dimLabels.push({ id: d.id, at: d.labelAt, el });
+      this.dimLabels.push({ id: d.id, at: d.labelAt, along: d.along, el });
     }
     if (this.dimEdit !== null && !dims.some((d) => d.id === this.dimEdit!.id)) this.dimEdit = null; // its dimension is gone
     if (hadFocus) this.dimEdit?.input.focus();
@@ -737,14 +737,30 @@ export class ModelView {
   }
 
   private placeDimLabels(): void {
+    /** Clear screen distance (px) between a dimension line and its value label. */
+    const DIM_LABEL_GAP = 12;
     const frame = this.dimFrame;
     if (frame === null || this.dimLabels.length === 0) return;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
+    const px = (p: Point): { x: number; y: number } => {
+      const s = v3(surfaceTo3d(frame, p)).project(this.camera);
+      return { x: ((s.x + 1) / 2) * w, y: ((1 - s.y) / 2) * h };
+    };
     for (const l of this.dimLabels) {
-      const s = v3(surfaceTo3d(frame, l.at)).project(this.camera);
-      l.el.style.left = `${((s.x + 1) / 2) * w}px`;
-      l.el.style.top = `${((1 - s.y) / 2) * h}px`;
+      // The label stands off to the side of its dimension line, clear of it:
+      // sitting on the line it would cover the points at its ends (a hole's
+      // centre, when the value is 0) and take the clicks meant for them.
+      const at = px(l.at);
+      const a = px(l.along[0]);
+      const b = px(l.along[1]);
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      // Square to the line on screen, the side that points up (to the right if the line is upright).
+      let n = len > 1e-6 ? { x: -(b.y - a.y) / len, y: (b.x - a.x) / len } : { x: 0, y: -1 };
+      if (n.y > 1e-6 || (Math.abs(n.y) <= 1e-6 && n.x < 0)) n = { x: -n.x, y: -n.y };
+      const reach = (Math.abs(n.x) * l.el.offsetWidth + Math.abs(n.y) * l.el.offsetHeight) / 2 + DIM_LABEL_GAP;
+      l.el.style.left = `${at.x + n.x * reach}px`;
+      l.el.style.top = `${at.y + n.y * reach}px`;
     }
   }
 
