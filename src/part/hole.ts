@@ -19,13 +19,13 @@ import type { Body } from "./kernel/types";
 import type { RZ } from "./kernel/revolve";
 import { revolveProfile } from "./kernel/revolve";
 import type { Surface } from "./cylFrame";
-import { cylTo3d, isCyl, radialDir } from "./cylFrame";
+import { alongSurface, cylTo3d, isCyl, radialDir, radiusAt, surfaceNormal } from "./cylFrame";
 import type { Frame } from "./plane";
 import { localTo3d } from "./plane";
 import { evalExpression } from "./params";
 import type { HoleDim, HoleFeature, HoleRef } from "./types";
 import type { Vec3 } from "./vec3";
-import { add, cross, scale, sub } from "./vec3";
+import { add, cross, dot, length, scale, sub } from "./vec3";
 
 const DRILL_POINT_DEG = 118;
 
@@ -190,18 +190,20 @@ export function leansAlongAxis(lean: { toward: number }): boolean {
  */
 export function drillAxis(frame: Surface, c: Point, lean: { angle: number; toward: number } | null, atAxis: boolean): { origin: Vec3; dir: Vec3 } {
   const cyl = isCyl(frame) ? frame : null;
-  const out = cyl === null ? (frame as Frame).n : radialDir(cyl, c.y);
+  const out = cyl === null ? (frame as Frame).n : surfaceNormal(cyl, c.y);
   const entry = cyl === null ? localTo3d(frame as Frame, c) : cylTo3d(cyl, c);
   if (lean === null) return { origin: entry, dir: scale(out, -1) };
-  // In-face directions the lean is measured in: flat = (u, v); round = (along the axis, round the shaft).
-  const t1 = cyl === null ? (frame as Frame).u : cyl.axis;
-  const t2 = cyl === null ? (frame as Frame).v : cross(cyl.axis, out);
+  // In-face directions the lean is measured in: flat = (u, v); round = (along the face, round the shaft).
+  const t1 = cyl === null ? (frame as Frame).u : alongSurface(cyl, c.y);
+  const t2 = cyl === null ? (frame as Frame).v : cross(cyl.axis, radialDir(cyl, c.y));
   const toward = add(scale(t1, Math.cos(lean.toward)), scale(t2, Math.sin(lean.toward)));
   const dir = add(scale(out, -Math.cos(lean.angle)), scale(toward, Math.sin(lean.angle)));
   if (cyl !== null && atAxis) {
-    // Back from the crossing point on the axis to the surface.
+    // Back from the crossing point on the axis to the surface (on a cone the
+    // surface is met where its radius has changed along the way).
     const crossing = add(cyl.origin, scale(cyl.axis, c.x));
-    return { origin: sub(crossing, scale(dir, cyl.radius / Math.cos(lean.angle))), dir };
+    const back = radiusAt(cyl, c.x) / (-dot(dir, radialDir(cyl, c.y)) + cyl.slope * dot(dir, cyl.axis));
+    return { origin: sub(crossing, scale(dir, back)), dir };
   }
   return { origin: entry, dir };
 }
@@ -229,29 +231,47 @@ export function holeTools(
   const stretch = lean === null ? 1 : 1 / Math.cos(lean.angle);
   const widestR = Math.max(d, h.style === "counterbore" ? (ev(h.cbDiameter) ?? 0) : 0, h.style === "countersink" ? (ev(h.csDiameter) ?? 0) : 0) / 2;
   if (h.extent === undefined && (depth === undefined || Number.isNaN(depth))) return `Invalid depth "${h.depth}"`;
-  const profile = holeProfile(
-    { style: h.style, extent: h.extent === "through" ? "through" : undefined },
-    {
-      d,
-      depth: h.extent === "toAxis" ? cyl!.radius * stretch : (depth ?? 0),
-      cbD: ev(h.cbDiameter),
-      cbDepth: ev(h.cbDepth),
-      csD: ev(h.csDiameter),
-      csAngle: ev(h.csAngle),
-    },
-    // A leaning drill's flat end is tilted to the far face: go further by
-    // its radius x tan(lean) so the whole end is out the other side.
-    throughLen * stretch + (lean === null ? 0 : widestR * Math.tan(lean.angle)),
-    lean === null ? 0 : widestR * Math.tan(lean.angle),
-  );
+  const widest = 2 * widestR;
+  /** The drill's shape; `toAxis` = how deep "to the axis" is from where it enters. */
+  const profileFor = (toAxis: number): ReturnType<typeof holeProfile> =>
+    holeProfile(
+      { style: h.style, extent: h.extent === "through" ? "through" : undefined },
+      {
+        d,
+        depth: h.extent === "toAxis" ? toAxis : (depth ?? 0),
+        cbD: ev(h.cbDiameter),
+        cbDepth: ev(h.cbDepth),
+        csD: ev(h.csDiameter),
+        csAngle: ev(h.csAngle),
+      },
+      // A leaning drill's flat end is tilted to the far face: go further by
+      // its radius x tan(lean) so the whole end is out the other side.
+      throughLen * stretch + (lean === null ? 0 : widestR * Math.tan(lean.angle)),
+      lean === null ? 0 : widestR * Math.tan(lean.angle),
+    );
+  const cone = cyl !== null && cyl.slope !== 0 ? cyl : null;
+  // (A cone's own "to the axis" depth is worked out per hole below: any positive depth checks the rest here.)
+  const profile = profileFor(cyl === null ? 0 : cone !== null ? 1 : cyl.radius * stretch);
   if (typeof profile === "string") return profile;
-  if (cyl !== null) {
-    const widest = Math.max(d, h.style === "counterbore" ? (ev(h.cbDiameter) ?? 0) : 0, h.style === "countersink" ? (ev(h.csDiameter) ?? 0) : 0);
-    if (widest >= 2 * cyl.radius) return `The hole is too wide for this round face (Ø${+(2 * cyl.radius).toFixed(3)})`;
-  }
+  if (cyl !== null && cone === null && widest >= 2 * cyl.radius) return `The hole is too wide for this round face (Ø${+(2 * cyl.radius).toFixed(3)})`;
   const centers = resolveCenters(h, params);
   if (typeof centers === "string") return centers;
-  return centers.map((c: Point, i) => {
-    return revolveProfile(h.id, `${i}`, profile, drillAxis(frame, c, lean, atAxis));
-  });
+  const tools: Body[] = [];
+  for (const [i, c] of centers.entries()) {
+    const axis = drillAxis(frame, c, lean, atAxis);
+    let shape = profile;
+    if (cone !== null) {
+      // A cone's radius is its own at every hole: the width check and "to the axis" go hole by hole.
+      const off = sub(axis.origin, cone.origin);
+      const r = length(sub(off, scale(cone.axis, dot(off, cone.axis))));
+      if (widest >= 2 * r) return `The hole is too wide for the cone there (Ø${+(2 * r).toFixed(3)})`;
+      if (h.extent === "toAxis") {
+        const toAxis = profileFor(r / -dot(axis.dir, radialDir(cone, c.y)));
+        if (typeof toAxis === "string") return toAxis;
+        shape = toAxis;
+      }
+    }
+    tools.push(revolveProfile(h.id, `${i}`, shape, axis));
+  }
+  return tools;
 }

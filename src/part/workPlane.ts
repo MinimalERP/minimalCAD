@@ -15,7 +15,7 @@ import type { EdgeRef, FacePlaneRef, ModelPlaneRef, TangentPlaneRef } from "./ty
 import { modelPlaneKind } from "./types";
 import type { TopoRef } from "./kernel/types";
 import { faceFrame, offsetFrame } from "./plane";
-import { cylFrame, radialDir } from "./cylFrame";
+import { alongSurface, cylTo3d, roundFrame, surfaceNormal } from "./cylFrame";
 import type { Vec3 } from "./vec3";
 import { add, cross, dot, length, normalize, scale, sub } from "./vec3";
 import { edgeFaceIds, modelTol } from "./edgeBlend";
@@ -80,13 +80,13 @@ export function resolveRoundFace(bodies: readonly Body[], on: TangentPlaneRef): 
   for (const body of bodies) {
     const face = body.faces.find((f) => faceHasRef(f, on.face));
     if (face === undefined) continue;
-    return face.geom.kind === "cylinder" ? { body, face } : "The face this plane is on is no longer round";
+    return roundFrame(face.geom) !== null ? { body, face } : "The face this plane is on is no longer round";
   }
   return "The round face this plane is on no longer exists";
 }
 
 /**
- * The plane touching round face `face` along one line, `angleDeg` round
+ * The plane touching round face `face` (a cylinder or a cone) along one line, `angleDeg` round
  * its axis (0 = toward world +Z, or +X on a vertical shaft -- the same zero
  * radial holes use), moved `offset` out from the surface (negative = into
  * the part: a flat, a keyway seat). Its normal points out of the shaft; its
@@ -96,14 +96,12 @@ export function resolveRoundFace(bodies: readonly Body[], on: TangentPlaneRef): 
  * on the plane (for display).
  */
 export function tangentFrame(body: Body, face: Face, angleDeg: number, offset: number): { frame: Frame; centerAt: Vec3 } {
-  if (face.geom.kind !== "cylinder") throw new Error("tangentFrame needs a round face");
-  const cyl = cylFrame(face.geom);
-  const n = radialDir(cyl, angleDeg);
-  const u = cyl.axis;
+  const cyl = roundFrame(face.geom);
+  if (cyl === null) throw new Error("tangentFrame needs a round face");
+  const n = surfaceNormal(cyl, angleDeg);
+  const u = alongSurface(cyl, angleDeg);
   const v = cross(n, u);
-  const onAxis = add(cyl.origin, scale(u, dot(scale(cyl.origin, -1), u)));
-  const out = scale(n, cyl.radius + offset);
-  // The face's own length along the axis, from its triangles.
+  // The face's own length along the axis (from the frame's origin), from its triangles.
   const { positions: p, indices, faceIds } = body.mesh;
   let lo = Infinity;
   let hi = -Infinity;
@@ -111,13 +109,23 @@ export function tangentFrame(body: Body, face: Face, angleDeg: number, offset: n
     if (faceIds[t] !== face.id) continue;
     for (let k = 0; k < 3; k++) {
       const i = indices[t * 3 + k]!;
-      const along = dot(sub({ x: p[i * 3]!, y: p[i * 3 + 1]!, z: p[i * 3 + 2]! }, onAxis), u);
+      const along = dot(sub({ x: p[i * 3]!, y: p[i * 3 + 1]!, z: p[i * 3 + 2]! }, cyl.origin), cyl.axis);
       lo = Math.min(lo, along);
       hi = Math.max(hi, along);
     }
   }
   const mid = Number.isFinite(lo) ? (lo + hi) / 2 : 0;
-  return { frame: { u, v, n, origin: add(onAxis, out) }, centerAt: add(add(onAxis, scale(u, mid)), out) };
+  const lift = scale(n, offset);
+  if (cyl.slope !== 0) {
+    // A cone: the plane touches it along a slant line (u), and every such
+    // plane passes through the apex -- the origin, so distances up the cone
+    // read from its tip.
+    return { frame: { u, v, n, origin: add(cyl.origin, lift) }, centerAt: add(cylTo3d(cyl, { x: mid, y: angleDeg }), lift) };
+  }
+  const onAxis = add(cyl.origin, scale(u, dot(scale(cyl.origin, -1), u)));
+  const out = scale(n, cyl.radius + offset);
+  const middle = Number.isFinite(lo) ? add(cyl.origin, scale(u, mid)) : onAxis;
+  return { frame: { u, v, n, origin: add(onAxis, out) }, centerAt: add(middle, out) };
 }
 
 /** Rodrigues rotation of `p` about unit axis `k` by `angle` radians. */

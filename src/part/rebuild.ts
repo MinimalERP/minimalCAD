@@ -26,7 +26,7 @@ import type { Polygon } from "./kernel/csg";
 import { bodyBounds, bodyToPolygons, boundsOverlap, polygonsToBody } from "./kernel/brep";
 import type { Body, Face, TopoRef } from "./kernel/types";
 import type { Surface } from "./cylFrame";
-import { cylFrame, isCyl } from "./cylFrame";
+import { isCyl, roundFrame } from "./cylFrame";
 import { dot, length, scale, sub } from "./vec3";
 import { faceHasRef, isPlaneRef } from "./kernel/types";
 import { resolveParameters, evalExpression } from "./params";
@@ -185,12 +185,13 @@ export function faceFrameOf(bodies: readonly Body[], ref: NonNullable<PlaneRef["
 }
 
 /** A hole's face among `bodies`: a flat face's Frame, or a round face's
- *  CylFrame; null if it's gone. */
+ *  (cylinder / cone) CylFrame; null if it's gone. */
 export function faceSurfaceOf(bodies: readonly Body[], ref: TopoRef): Surface | null {
   for (const body of bodies) {
     const face = body.faces.find((f) => faceHasRef(f, ref));
     if (face?.geom.kind === "plane") return faceFrame(face.geom.origin, face.geom.normal);
-    if (face?.geom.kind === "cylinder") return cylFrame(face.geom);
+    const round = face === undefined ? null : roundFrame(face.geom);
+    if (round !== null) return round;
   }
   return null;
 }
@@ -200,18 +201,24 @@ export function faceSurfaceOf(bodies: readonly Body[], ref: TopoRef): Surface | 
 export function surfaceThroughLength(bodies: readonly Body[], s: Surface): number {
   if (!isCyl(s)) return throughLength(bodies, s);
   let reach = 0;
+  let lo = Infinity;
+  let hi = -Infinity;
   for (const b of bodies) {
     const { min, max } = bodyBounds(b);
     for (const x of [min.x, max.x]) {
       for (const y of [min.y, max.y]) {
         for (const z of [min.z, max.z]) {
           const d = sub({ x, y, z }, s.origin);
-          reach = Math.max(reach, length(sub(d, scale(s.axis, dot(d, s.axis)))));
+          const along = dot(d, s.axis);
+          reach = Math.max(reach, length(sub(d, scale(s.axis, along))));
+          lo = Math.min(lo, along);
+          hi = Math.max(hi, along);
         }
       }
     }
   }
-  const len = s.radius + reach;
+  // A cone's holes go in tipped along the axis: clear the model that way too.
+  const len = s.slope === 0 ? s.radius + reach : 2 * reach + (hi > lo ? hi - lo : 0);
   return len + Math.max(1, len * 0.02);
 }
 

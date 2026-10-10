@@ -2,8 +2,10 @@
  * MinimalCAD Web
  * part/cylFrame.ts
  *
- * Coordinates ON a round (cylindrical) face, for radial holes: a point is
- * (x = distance along the axis in mm, y = angle around it in degrees).
+ * Coordinates ON a round face (a cylinder or a cone), for radial holes: a
+ * point is (x = distance along the axis in mm, y = angle around it in
+ * degrees). On a cone x is measured from its apex, and the face's radius
+ * grows with it (`slope`).
  * Angle 0 is world +Z seen square to the axis (world +X when the axis is
  * vertical); angles run counter-clockwise looking down the axis.
  *
@@ -28,7 +30,10 @@ export interface CylFrame {
   ref: Vec3;
   /** Unit direction of angle 90 (axis x ref). */
   side: Vec3;
+  /** Radius at x = 0: the cylinder's own; 0 for a cone (x = 0 is its apex). */
   radius: number;
+  /** Radius gained per mm along the axis: 0 = a cylinder, else a cone. */
+  slope: number;
 }
 
 export type Surface = Frame | CylFrame;
@@ -37,13 +42,30 @@ export const isCyl = (s: Surface): s is CylFrame => "kind" in s && s.kind === "c
 
 const DEG = Math.PI / 180;
 
-export function cylFrame(g: Extract<FaceGeom, { kind: "cylinder" }>): CylFrame {
-  const axis = normalize(g.axis);
+function roundFrameOn(origin: Vec3, axisDir: Vec3, radius: number, slope: number): CylFrame {
+  const axis = normalize(axisDir);
   let ref = sub(vec3(0, 0, 1), scale(axis, axis.z));
   if (length(ref) < 1e-6) ref = sub(vec3(1, 0, 0), scale(axis, axis.x));
   ref = normalize(ref);
-  return { kind: "cyl", origin: g.axisOrigin, axis, ref, side: cross(axis, ref), radius: g.radius };
+  return { kind: "cyl", origin, axis, ref, side: cross(axis, ref), radius, slope };
 }
+
+export function cylFrame(g: Extract<FaceGeom, { kind: "cylinder" }>): CylFrame {
+  return roundFrameOn(g.axisOrigin, g.axis, g.radius, 0);
+}
+
+/** A cone's frame: x runs from the apex along the axis, toward the wide end. */
+export function coneFrame(g: Extract<FaceGeom, { kind: "cone" }>): CylFrame {
+  return roundFrameOn(g.apex, g.axis, 0, Math.tan(g.halfAngle));
+}
+
+/** The frame of a round face (cylinder or cone); null for any other face. */
+export function roundFrame(g: FaceGeom): CylFrame | null {
+  return g.kind === "cylinder" ? cylFrame(g) : g.kind === "cone" ? coneFrame(g) : null;
+}
+
+/** The face's radius at `x` along its axis. */
+export const radiusAt = (f: CylFrame, x: number): number => f.radius + f.slope * x;
 
 /** Unit direction (square to the axis) at angle `deg`. */
 export function radialDir(f: CylFrame, deg: number): Vec3 {
@@ -55,12 +77,24 @@ export function angleOf(f: CylFrame, d: Vec3): number {
   return Math.atan2(dot(d, f.side), dot(d, f.ref)) / DEG;
 }
 
-/** Face point -> world, `h` out from the surface. */
-export function cylTo3d(f: CylFrame, p: Point, h = 0): Vec3 {
-  return add(add(f.origin, scale(f.axis, p.x)), scale(radialDir(f, p.y), f.radius + h));
+/** Unit direction straight out of the surface at angle `deg` (on a cone it tips back toward the apex). */
+export function surfaceNormal(f: CylFrame, deg: number): Vec3 {
+  const r = radialDir(f, deg);
+  return f.slope === 0 ? r : normalize(sub(r, scale(f.axis, f.slope)));
 }
 
-/** World point -> face point (projected onto the cylinder). */
+/** Unit direction along the surface at angle `deg`, toward growing x (a cone's slant line). */
+export function alongSurface(f: CylFrame, deg: number): Vec3 {
+  return f.slope === 0 ? f.axis : normalize(add(f.axis, scale(radialDir(f, deg), f.slope)));
+}
+
+/** Face point -> world, `h` out from the surface. */
+export function cylTo3d(f: CylFrame, p: Point, h = 0): Vec3 {
+  const on = add(add(f.origin, scale(f.axis, p.x)), scale(radialDir(f, p.y), radiusAt(f, p.x)));
+  return h === 0 ? on : add(on, scale(surfaceNormal(f, p.y), h));
+}
+
+/** World point -> face point (projected onto the round face). */
 export function cylFromWorld(f: CylFrame, w: Vec3): Point {
   const d = sub(w, f.origin);
   return { x: dot(d, f.axis), y: angleOf(f, d) };
@@ -73,8 +107,8 @@ export function wrapDeg(a: number): number {
   return r;
 }
 
-/** mm per degree around the face. */
-export const mmPerDeg = (f: CylFrame): number => f.radius * DEG;
+/** mm per degree around the face (at `x` along it: a cone's radius changes). */
+export const mmPerDeg = (f: CylFrame, x = 0): number => radiusAt(f, x) * DEG;
 
 export function surfaceTo3d(s: Surface, p: Point, h = 0): Vec3 {
   return isCyl(s) ? cylTo3d(s, p, h) : localTo3d(s, p, h);

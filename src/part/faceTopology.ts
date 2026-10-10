@@ -12,7 +12,7 @@ import type { Point } from "../core/types";
 import type { Body, Edge, TopoRef } from "./kernel/types";
 import { faceHasRef } from "./kernel/types";
 import type { CylFrame } from "./cylFrame";
-import { angleOf, wrapDeg } from "./cylFrame";
+import { angleOf, radiusAt, wrapDeg } from "./cylFrame";
 import type { Frame } from "./plane";
 import type { Vec3 } from "./vec3";
 import { cross, dot, length, normalize, scale, sub } from "./vec3";
@@ -103,7 +103,7 @@ const MAIN_PLANES: [string, Vec3][] = [
  *  straight seams along it, flats along the shaft (at their normal's
  *  angle) and the main planes through the axis (both sides). */
 export function refsOnRoundFace(body: Body, ref: TopoRef, cyl: CylFrame): RoundFaceRef[] {
-  const tol = cyl.radius * 1e-6 + 1e-9;
+  let tol = cyl.radius * 1e-6 + 1e-9;
   const along = (p: Vec3): number => dot(sub(p, cyl.origin), cyl.axis);
   const offAxis = (p: Vec3): number => {
     const d = sub(p, cyl.origin);
@@ -124,6 +124,9 @@ export function refsOnRoundFace(body: Body, ref: TopoRef, cyl: CylFrame): RoundF
     }
   }
   if (!(x1 > x0)) return [];
+  // The face's widest radius (a cone's changes along it).
+  const widest = Math.max(radiusAt(cyl, x0), radiusAt(cyl, x1));
+  tol = widest * 1e-6 + 1e-9;
 
   const out: RoundFaceRef[] = [];
   const rims: number[] = [];
@@ -141,7 +144,7 @@ export function refsOnRoundFace(body: Body, ref: TopoRef, cyl: CylFrame): RoundF
       // up to a chord's sag inside the true radius).
       const d = sub(g.b, g.a);
       if (length(cross(d, cyl.axis)) > length(d) * 1e-6) continue;
-      if (Math.abs(offAxis(g.a) - cyl.radius) > cyl.radius * 2e-3) continue;
+      if (cyl.slope !== 0 || Math.abs(offAxis(g.a) - cyl.radius) > cyl.radius * 2e-3) continue;
       const y = angleOf(cyl, sub(g.a, cyl.origin));
       const [xa, xb] = [along(g.a), along(g.b)].sort((p, q) => p - q) as [number, number];
       out.push({ seg: [{ x: xa, y }, { x: xb, y }], label: "edge" });
@@ -152,7 +155,7 @@ export function refsOnRoundFace(body: Body, ref: TopoRef, cyl: CylFrame): RoundF
     const n = normalize(f.geom.normal);
     if (Math.abs(dot(n, cyl.axis)) > 1e-6) continue;
     // A flat along the shaft, cutting into it (a key flat): angle of its normal.
-    if (Math.abs(dot(sub(f.geom.origin, cyl.origin), n)) >= cyl.radius - tol) continue;
+    if (Math.abs(dot(sub(f.geom.origin, cyl.origin), n)) >= widest - tol) continue;
     const y = angleOf(cyl, n);
     out.push({ seg: [{ x: x0, y }, { x: x1, y }], label: "flat", flat: f.ref });
   }

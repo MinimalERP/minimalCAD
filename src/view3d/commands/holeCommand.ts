@@ -261,6 +261,9 @@ export class HoleCommand implements ModelCommand {
     return isBasePlane(key) ? planeFrame({ base: key, offset: 0 }) : (this.ctx.result()?.planes.get(key)?.frame ?? null);
   }
 
+  /** Where along a cone the cursor last was (see ky). */
+  private coneX = 0;
+
   private cyl(): CylFrame | null {
     return this.frame !== null && isCyl(this.frame) ? this.frame : null;
   }
@@ -270,7 +273,11 @@ export class HoleCommand implements ModelCommand {
   /** mm per unit of y: 1 on a flat face, mm per degree on a round one. */
   private ky(): number {
     const c = this.cyl();
-    return c === null ? 1 : mmPerDeg(c);
+    if (c === null) return 1;
+    // A cone's radius changes along it: measured where the selected hole (else the first, else the cursor) is.
+    const sel = this.selection;
+    const x = (sel?.kind === "hole" ? this.centers[sel.i]?.x : undefined) ?? this.centers[0]?.x ?? this.coneX;
+    return Math.max(mmPerDeg(c, x), 1e-9);
   }
 
   /** b.y - a.y, the short way round on a round face. */
@@ -479,7 +486,10 @@ export class HoleCommand implements ModelCommand {
 
   onSurfaceHover(hit: SurfaceHit | null): void {
     const onOurFace = hit !== null && (this.face === null || this.isOurFace(hit));
-    if (onOurFace) this.setPickScale(hit.raw);
+    if (onOurFace) {
+      this.coneX = hit.raw.x;
+      this.setPickScale(hit.raw);
+    }
     let near: { ref: HoleRef; label: string } | null = null;
     const sel = this.selection;
     if (onOurFace && this.constrain && sel?.kind === "hole" && !this.locked(sel.i)) near = this.refNear(hit.raw, sel.i);
@@ -733,7 +743,7 @@ export class HoleCommand implements ModelCommand {
     this.leanRows.setVisible(this.leaning());
     this.locateChoice.setVisible(this.canLocateAxis());
     this.faceSel.set(
-      this.face === null ? "Click on a face" : cyl !== null ? `Round face Ø${+(2 * cyl.radius).toFixed(3)}` : isPlaneRef(this.face) ? `Work plane ${this.face.feature}` : "Flat face",
+      this.face === null ? "Click on a face" : cyl !== null ? (cyl.slope !== 0 ? "Conical face" : `Round face Ø${+(2 * cyl.radius).toFixed(3)}`) : isPlaneRef(this.face) ? `Work plane ${this.face.feature}` : "Flat face",
       this.face !== null,
     );
     const n = this.centers.length;

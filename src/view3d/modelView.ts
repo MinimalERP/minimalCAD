@@ -24,7 +24,7 @@ import type { FaceSnap } from "../part/faceTopology";
 import { dot, sub } from "../part/vec3";
 import type { Vec3 } from "../part/vec3";
 import type { Surface } from "../part/cylFrame";
-import { cylFrame, cylFromWorld, surfaceSegment, surfaceTo3d } from "../part/cylFrame";
+import { cylFromWorld, roundFrame, surfaceSegment, surfaceTo3d } from "../part/cylFrame";
 import type { Region } from "../part/profile";
 import type { Point } from "../core/types";
 
@@ -1023,9 +1023,9 @@ export class ModelView {
       const faceId = h?.faceIndex == null || body === undefined ? undefined : body.mesh.faceIds[h.faceIndex];
       const face = faceId === undefined ? undefined : body!.faces[faceId];
       if (h === undefined || body === undefined || face === undefined) return null;
-      if (face.geom.kind === "cylinder") {
-        // Round face: only its outside (radial holes), no osnaps.
-        const cyl = cylFrame(face.geom);
+      const cyl = roundFrame(face.geom);
+      if (cyl !== null) {
+        // Round face (cylinder or cone): only its outside (radial holes), no osnaps.
         const p = { x: h.point.x, y: h.point.y, z: h.point.z };
         const d = sub(p, cyl.origin);
         const radial = sub(d, { x: cyl.axis.x * dot(d, cyl.axis), y: cyl.axis.y * dot(d, cyl.axis), z: cyl.axis.z * dot(d, cyl.axis) });

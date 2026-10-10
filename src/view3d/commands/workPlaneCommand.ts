@@ -299,8 +299,8 @@ export class WorkPlaneCommand implements ModelCommand {
     if (face === undefined) return;
     const picked = { body: hit.body, face };
     if (this.type === "tangent") {
-      if (face.geom.kind !== "cylinder") {
-        this.dialog.setError("That face is not round - click a round (cylindrical) face");
+      if (face.geom.kind !== "cylinder" && face.geom.kind !== "cone") {
+        this.dialog.setError("That face is not round - click a cylinder or a cone");
         return;
       }
       this.faces = [picked];
