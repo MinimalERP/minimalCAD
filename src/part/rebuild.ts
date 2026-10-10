@@ -34,7 +34,7 @@ import type { Frame } from "./plane";
 import { findProfiles, regionContains } from "./profile";
 import type { ProfileResult, Region } from "./profile";
 import type { SheetFeature } from "./types";
-import type { EdgeFeature, ExtrudeFeature, HoleFeature, PartData, PlaneRef, RevolveAxis, RevolveFeature, SketchData, WorkPlane } from "./types";
+import type { EdgeFeature, ExtrudeFeature, FeatureData, HoleFeature, PartData, PlaneRef, RevolveAxis, RevolveFeature, SketchData, WorkPlane } from "./types";
 import { modelPlane } from "./workPlane";
 import type { Vec3 } from "./vec3";
 import { isEdgeFeature } from "./types";
@@ -43,7 +43,7 @@ import { holeTools } from "./hole";
 import { applyRotate } from "./rotateBody";
 import { kFactor, onSegment, sheetBody, sheetMaterial } from "./sheetMetal";
 import type { SheetBend } from "./sheetMetal";
-import { DRAWING_SKETCH, FACE_PLANE, isBasePlane } from "./types";
+import { DRAWING_SKETCH, FACE_PLANE, isBasePlane, usesSketch } from "./types";
 
 export interface FeatureStatus {
   ok: boolean;
@@ -476,12 +476,136 @@ export function sheetFeatureBody(f: SheetFeature, geo: SketchGeometry, params: R
   return typeof body === "string" ? body : { body, values };
 }
 
+export function clearRebuildCache(): void {
+  rebuildCache.clear();
+}
+
+interface FeatureStepSnapshot {
+  bodies: Body[];
+  status: Map<string, FeatureStatus>;
+  made: Map<string, MadeTool[]>;
+  sketches: Map<string, SketchGeometry>;
+  planes: Map<string, WorkPlaneGeometry>;
+}
+
+const rebuildCache = new Map<string, FeatureStepSnapshot>();
+const MAX_CACHE_ENTRIES = 200;
+
+function cacheGet(key: string): FeatureStepSnapshot | undefined {
+  const val = rebuildCache.get(key);
+  if (val !== undefined) {
+    // Re-insert to maintain LRU order
+    rebuildCache.delete(key);
+    rebuildCache.set(key, val);
+  }
+  return val;
+}
+
+function cacheSet(key: string, val: FeatureStepSnapshot): void {
+  if (rebuildCache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = rebuildCache.keys().next().value;
+    if (oldest !== undefined) rebuildCache.delete(oldest);
+  }
+  rebuildCache.set(key, val);
+}
+
+function cloneSnapshot(s: FeatureStepSnapshot): FeatureStepSnapshot {
+  return {
+    bodies: s.bodies.slice(),
+    status: new Map(s.status),
+    made: new Map(s.made),
+    sketches: new Map(s.sketches),
+    planes: new Map(s.planes),
+  };
+}
+
+function fastHash(str: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x84222325;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ ((c << 5) | (c >>> 27)), 0x5bd1e995);
+  }
+  return (h1 >>> 0).toString(36) + "_" + (h2 >>> 0).toString(36);
+}
+
+function makeBaseKey(part: PartData, drawingEntities: Record<string, unknown>[]): string {
+  const basePlanes = part.planes.filter((p) => p.on === undefined);
+  return fastHash(JSON.stringify({ params: part.parameters, planes: basePlanes, drawing: drawingEntities }));
+}
+
+function featureSignature(feature: FeatureData, part: PartData): string {
+  let sketchData: unknown = null;
+  if (usesSketch(feature)) {
+    if (feature.sketch === DRAWING_SKETCH) {
+      sketchData = "DRAWING";
+    } else {
+      const s = part.sketches.find((x) => x.id === feature.sketch);
+      const wp = s?.plane.base !== undefined ? part.planes.find((x) => x.id === s.plane.base) : undefined;
+      sketchData = [s, wp];
+    }
+  }
+  let planeData: unknown = null;
+  if (feature.type === "hole" && isPlaneRef(feature.face)) {
+    planeData = part.planes.find((x) => x.id === feature.face.feature);
+  } else if (feature.type === "pattern" && feature.plane) {
+    planeData = part.planes.find((x) => x.id === feature.plane);
+  }
+  return fastHash(JSON.stringify([feature, sketchData, planeData]));
+}
+
 export function rebuild(part: PartData, drawingEntities: Record<string, unknown>[] = []): RebuildResult {
   const params = resolveParameters(part.parameters);
-  const planes = resolveWorkPlanes(part, params);
-  const sketches = new Map<string, SketchGeometry>();
-  sketches.set(DRAWING_SKETCH, sketchGeometry(drawingSketch(drawingEntities), planeFrame({ base: "XY", offset: 0 })));
-  const bodies: Body[] = [];
+
+  // Compute prefix cache keys
+  const baseKey = makeBaseKey(part, drawingEntities);
+  const stepKeys: string[] = [];
+  let prevKey = baseKey;
+  for (const feature of part.features) {
+    const nextKey = fastHash(prevKey + "/" + featureSignature(feature, part));
+    stepKeys.push(nextKey);
+    prevKey = nextKey;
+  }
+
+  // Find largest matching prefix in cache
+  let matchedIndex = -1;
+  for (let i = part.features.length - 1; i >= 0; i--) {
+    if (cacheGet(stepKeys[i]!) !== undefined) {
+      matchedIndex = i;
+      break;
+    }
+  }
+
+  let snapshot: FeatureStepSnapshot;
+  let startIndex: number;
+
+  if (matchedIndex >= 0) {
+    snapshot = cloneSnapshot(cacheGet(stepKeys[matchedIndex]!)!);
+    startIndex = matchedIndex + 1;
+  } else {
+    // Check base key cache (before any features)
+    const cachedBase = cacheGet(baseKey);
+    if (cachedBase !== undefined) {
+      snapshot = cloneSnapshot(cachedBase);
+    } else {
+      const planes = resolveWorkPlanes(part, params);
+      const sketches = new Map<string, SketchGeometry>();
+      sketches.set(DRAWING_SKETCH, sketchGeometry(drawingSketch(drawingEntities), planeFrame({ base: "XY", offset: 0 })));
+      snapshot = {
+        bodies: [],
+        status: new Map<string, FeatureStatus>(),
+        made: new Map<string, MadeTool[]>(),
+        sketches,
+        planes,
+      };
+      cacheSet(baseKey, cloneSnapshot(snapshot));
+    }
+    startIndex = 0;
+  }
+
+  const { bodies, status, made, sketches, planes } = snapshot;
+
   // Sketches resolve lazily, in history order: a sketch on a face needs the
   // bodies of the features before the one that uses it.
   const resolveSketch = (id: string): SketchGeometry | undefined => {
@@ -500,8 +624,6 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
     return geo;
   };
 
-  const status = new Map<string, FeatureStatus>();
-  const made = new Map<string, MadeTool[]>();
   /** Applies a feature's tool (or reports why there is none), remembering it for patterns. */
   const use = (id: string, tool: Body | string, op: ExtrudeFeature["operation"]): FeatureStatus => {
     if (typeof tool === "string") return { ok: false, error: tool };
@@ -515,9 +637,12 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
     if (wp?.on !== undefined && !planes.has(wp.id)) planes.set(wp.id, resolveModelPlane(wp, bodies, params));
     return planes.get(key)?.frame ?? null;
   };
-  for (const feature of part.features) {
+
+  for (let i = startIndex; i < part.features.length; i++) {
+    const feature = part.features[i]!;
     if (feature.suppressed === true) {
       status.set(feature.id, { ok: true });
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     if (feature.type === "pattern") {
@@ -535,28 +660,34 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
         }
         status.set(feature.id, applied ? { ok: true } : { ok: false, error: "None of the copies touch the solid" });
       }
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     if (feature.type === "rotate") {
       status.set(feature.id, applyRotate(feature, bodies, made, params));
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     if (feature.type === "hole") {
       status.set(feature.id, applyHole(feature, bodies, params, made, namedPlane));
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     if (isEdgeFeature(feature)) {
       status.set(feature.id, applyEdgeFeature(feature, bodies, params));
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     const geo = resolveSketch(feature.sketch);
     if (geo === undefined) {
       status.set(feature.id, { ok: false, error: `Sketch ${feature.sketch} is missing or its plane is broken` });
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     if (feature.type === "sheet") {
       const tool = sheetFeatureBody(feature, geo, params);
       status.set(feature.id, use(feature.id, typeof tool === "string" ? tool : tool.body, "new"));
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     const regions = selectRegions(geo.profiles.regions, feature.profiles);
@@ -568,34 +699,40 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
             ? `No closed profile to ${feature.type}`
             : "Profile not found - the shape was deleted or opened up",
       });
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     if (feature.type === "revolve") {
       const sweep = revolveSweep(feature, params);
       if (sweep === null) {
         status.set(feature.id, { ok: false, error: `Invalid angle "${feature.angle}" - use more than 0, up to 360` });
+        cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
         continue;
       }
       const tool = revolveRegions(feature.id, regions, geo.frame, resolveRevolveAxis(feature.axis, geo.lines), sweep[0], sweep[1]);
       status.set(feature.id, use(feature.id, tool, feature.operation));
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     if (feature.extent === "toFace") {
       const plane = upToPlane(bodies, feature.toFace);
       const tool = typeof plane === "string" ? plane : extrudeTool(feature, regions, geo.frame, 0, 1, params, plane);
       status.set(feature.id, use(feature.id, tool, feature.operation));
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     const through = feature.extent === "through";
     const distance = through ? throughLength(bodies, geo.frame) : evalExpression(feature.distance, params);
     if (distance === null || !(distance > 0)) {
       status.set(feature.id, { ok: false, error: `Invalid distance "${feature.distance}"` });
+      cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
       continue;
     }
     // Through all: the tool reaches past the model in the chosen direction(s).
     const [h0, h1] = through && feature.direction === "symmetric" ? [-distance, distance] : extrudeExtent(feature.direction, distance);
     const tool = extrudeTool(feature, regions, geo.frame, h0, h1, params);
     status.set(feature.id, use(feature.id, tool, feature.operation));
+    cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));
   }
   for (const sketch of part.sketches) resolveSketch(sketch.id);
   for (const wp of part.planes) if (wp.on !== undefined && !planes.has(wp.id)) planes.set(wp.id, resolveModelPlane(wp, bodies, params));

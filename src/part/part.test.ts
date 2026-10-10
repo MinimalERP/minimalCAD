@@ -8,7 +8,7 @@ import { findProfiles } from "./profile";
 import { extrudeRegions, meshVolume } from "./kernel/extrude";
 import { faceFrame, localTo3d, planeFrame, toLocal, workPlaneFrame } from "./plane";
 import { evalExpression, resolveParameters } from "./params";
-import { rebuild } from "./rebuild";
+import { clearRebuildCache, rebuild } from "./rebuild";
 import { emptyPart, nextId, parsePart } from "./types";
 import type { ExtrudeFeature, PartData } from "./types";
 import type { Body } from "./kernel/types";
@@ -426,5 +426,49 @@ describe("join / cut features in rebuild", () => {
     const legacy = parsePart({ features: [{ id: "E", type: "extrude", sketch: "Drawing", distance: 5 }] });
     expect((legacy?.features[0] as ExtrudeFeature).operation).toBe("new");
     expect((legacy?.features[0] as ExtrudeFeature).extent).toBeUndefined();
+  });
+
+  it("incrementally rebuilds and caches intermediate feature states", () => {
+    clearRebuildCache();
+    const part = emptyPart();
+    part.features.push({
+      id: "Extrude001",
+      type: "extrude",
+      sketch: "Drawing",
+      profiles: "all",
+      distance: "20",
+      direction: "normal",
+      operation: "new",
+    });
+    const drawing = rectLines(100, 50).map((e) => e.serialize());
+    const r1 = rebuild(part, drawing);
+    expect(r1.bodies).toHaveLength(1);
+    const v1 = meshVolume(r1.bodies[0]!.mesh.positions, r1.bodies[0]!.mesh.indices);
+
+    // Adding a second feature reuses feature 1's cached state
+    part.features.push({
+      id: "Extrude002",
+      type: "extrude",
+      sketch: "Drawing",
+      profiles: "all",
+      distance: "10",
+      direction: "reverse",
+      operation: "new",
+    });
+    const r2 = rebuild(part, drawing);
+    expect(r2.bodies).toHaveLength(2);
+    expect(meshVolume(r2.bodies[0]!.mesh.positions, r2.bodies[0]!.mesh.indices)).toBeCloseTo(v1, 2);
+
+    // Editing only the second feature reuses feature 1
+    (part.features[1] as ExtrudeFeature).distance = "15";
+    const r3 = rebuild(part, drawing);
+    expect(r3.bodies).toHaveLength(2);
+    const v2 = meshVolume(r3.bodies[1]!.mesh.positions, r3.bodies[1]!.mesh.indices);
+    expect(v2).toBeCloseTo(100 * 50 * 15, 2);
+
+    // Changing drawing entities invalidates cache and rebuilds cleanly
+    const smallDrawing = rectLines(50, 25).map((e) => e.serialize());
+    const r4 = rebuild(part, smallDrawing);
+    expect(meshVolume(r4.bodies[0]!.mesh.positions, r4.bodies[0]!.mesh.indices)).toBeCloseTo(50 * 25 * 20, 2);
   });
 });
