@@ -22,8 +22,9 @@ import { Line } from "../entities/line";
 import { Polyline } from "../entities/polyline";
 import type { Entity } from "../entities/entity";
 import { subtract, union } from "./kernel/csg";
+import type { Polygon } from "./kernel/csg";
 import { bodyBounds, bodyToPolygons, boundsOverlap, polygonsToBody } from "./kernel/brep";
-import type { Body, TopoRef } from "./kernel/types";
+import type { Body, Face, TopoRef } from "./kernel/types";
 import type { Surface } from "./cylFrame";
 import { cylFrame, isCyl } from "./cylFrame";
 import { dot, length, scale, sub } from "./vec3";
@@ -377,21 +378,40 @@ export function applyOperation(bodies: Body[], tool: Body, operation: ExtrudeFea
     bodies.splice(at, 0, merged);
     return { ok: true };
   }
-  // cut
-  if (hit.length === 0) return { ok: false, error: "Cut removed nothing - the shape doesn't reach the solid" };
+  return applyCuts(bodies, [tool]);
+}
+
+const NO_CUT = "Cut removed nothing - the shape doesn't reach the solid";
+
+/**
+ * Cuts every tool out of the model (in place) in ONE boolean per body: the
+ * tools are first made one solid (those that overlap are merged), so a
+ * pattern of 12 holes rebuilds the body once, not 12 times.
+ */
+export function applyCuts(bodies: Body[], tools: readonly Body[]): FeatureStatus {
+  const hit = bodies.filter((b) => tools.some((t) => boundsOverlap(b, t)));
+  if (hit.length === 0) return { ok: false, error: NO_CUT };
+  let toolFaces: Face[] = [];
+  let toolPolys: Polygon[] = [];
+  tools.forEach((t, i) => {
+    const polys = bodyToPolygons(t, toolFaces.length);
+    toolFaces = [...toolFaces, ...t.faces];
+    toolPolys = tools.slice(0, i).some((u) => boundsOverlap(u, t)) ? union(toolPolys, polys) : [...toolPolys, ...polys];
+  });
   let removed = false;
   for (const b of hit) {
-    const faces = [...b.faces, ...tool.faces];
-    const polys = subtract(bodyToPolygons(b, 0), bodyToPolygons(tool, b.faces.length));
-    // The tool never actually touched this body (only its bounding box did).
-    if (polys.length > 0 && !polys.some((p) => p.faceId >= b.faces.length)) continue;
+    const faces = [...b.faces, ...toolFaces];
+    const n = b.faces.length;
+    const polys = subtract(bodyToPolygons(b, 0), toolPolys.map((p) => ({ ...p, faceId: p.faceId + n })));
+    // The tools never actually touched this body (only their bounding boxes did).
+    if (polys.length > 0 && !polys.some((p) => p.faceId >= n)) continue;
     const result = polygonsToBody(b.id, b.feature, polys, faces);
     removed = true;
     const at = bodies.indexOf(b);
     if (result.mesh.indices.length === 0) bodies.splice(at, 1);
     else bodies[at] = result;
   }
-  return removed ? { ok: true } : { ok: false, error: "Cut removed nothing - the shape doesn't reach the solid" };
+  return removed ? { ok: true } : { ok: false, error: NO_CUT };
 }
 
 /** Drills a Hole feature into the bodies (in place). */
@@ -415,11 +435,7 @@ function applyHole(
     feature.id,
     tools.map((tool) => ({ tool, op: "cut" as const })),
   );
-  let removedAny = false;
-  for (const tool of tools) {
-    if (applyOperation(bodies, tool, "cut").ok) removedAny = true;
-  }
-  return removedAny ? { ok: true } : { ok: false, error: "Hole misses the solid" };
+  return applyCuts(bodies, tools).ok ? { ok: true } : { ok: false, error: "Hole misses the solid" };
 }
 
 /** Fillets / chamfers the picked edges (in place): every tool is built
@@ -655,9 +671,11 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
         made.set(feature.id, tools);
         // Additions first, then cuts: a patterned boss with a hole in it keeps its hole.
         let applied = false;
-        for (const t of [...tools.filter((x) => x.op !== "cut"), ...tools.filter((x) => x.op === "cut")]) {
+        for (const t of tools.filter((x) => x.op !== "cut")) {
           if (applyOperation(bodies, t.tool, t.op).ok) applied = true;
         }
+        const cuts = tools.filter((x) => x.op === "cut").map((x) => x.tool);
+        if (cuts.length > 0 && applyCuts(bodies, cuts).ok) applied = true;
         status.set(feature.id, applied ? { ok: true } : { ok: false, error: "None of the copies touch the solid" });
       }
       cacheSet(stepKeys[i]!, cloneSnapshot(snapshot));

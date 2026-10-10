@@ -83,10 +83,19 @@ class Welder {
     const cx = Math.floor(p.x / s);
     const cy = Math.floor(p.y / s);
     const cz = Math.floor(p.z / s);
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dz = -1; dz <= 1; dz++) {
-          for (const i of this.cells.get(this.key(cx + dx, cy + dy, cz + dz)) ?? []) {
+    // Only the cells within `tol` of p can hold a match: nearly always just its own.
+    const x0 = Math.floor((p.x - this.tol) / s);
+    const x1 = Math.floor((p.x + this.tol) / s);
+    const y0 = Math.floor((p.y - this.tol) / s);
+    const y1 = Math.floor((p.y + this.tol) / s);
+    const z0 = Math.floor((p.z - this.tol) / s);
+    const z1 = Math.floor((p.z + this.tol) / s);
+    for (let x = x0; x <= x1; x++) {
+      for (let y = y0; y <= y1; y++) {
+        for (let z = z0; z <= z1; z++) {
+          const cell = this.cells.get(this.key(x, y, z));
+          if (cell === undefined) continue;
+          for (const i of cell) {
             const q = this.points[i]!;
             if (Math.abs(q.x - p.x) <= this.tol && Math.abs(q.y - p.y) <= this.tol && Math.abs(q.z - p.z) <= this.tol) return i;
           }
@@ -104,7 +113,7 @@ class Welder {
 
 /** Uniform grid over vertex indices, for "which vertices lie on this segment". */
 class VertexGrid {
-  private cells = new Map<string, number[]>();
+  private cells = new Map<number, number[]>();
   constructor(
     private points: readonly Vec3[],
     private cell: number,
@@ -116,8 +125,9 @@ class VertexGrid {
       else list.push(i);
     });
   }
-  private key(x: number, y: number, z: number): string {
-    return `${x},${y},${z}`;
+  /** Hashed, as in Welder: a clash only adds candidates, the caller's distance test decides. */
+  private key(x: number, y: number, z: number): number {
+    return (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) | 0;
   }
   near(a: Vec3, b: Vec3): number[] {
     const c = this.cell;
@@ -132,7 +142,10 @@ class VertexGrid {
     if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > this.points.length) return this.points.map((_, i) => i);
     for (let x = x0; x <= x1; x++) {
       for (let y = y0; y <= y1; y++) {
-        for (let z = z0; z <= z1; z++) out.push(...(this.cells.get(this.key(x, y, z)) ?? []));
+        for (let z = z0; z <= z1; z++) {
+          const list = this.cells.get(this.key(x, y, z));
+          if (list !== undefined) for (const i of list) out.push(i);
+        }
       }
     }
     return out;
@@ -196,29 +209,42 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
   //     a T-junction is two shorter edges), so only those are searched.
   const grid = new VertexGrid(pts, Math.max(size / 32, tol * 10));
   const np = pts.length;
-  const twinned = new Set<number>();
-  for (const p of polys) for (let k = 0; k < p.idx.length; k++) twinned.add(p.idx[k]! * np + p.idx[(k + 1) % p.idx.length]!);
+  /** Directed edges as "ends of the edges leaving each vertex": is there an edge a -> b? */
+  const edgesFrom = (): ((a: number, b: number) => boolean) => {
+    const from: number[][] = Array.from({ length: np }, () => []);
+    for (const p of polys) for (let k = 0; k < p.idx.length; k++) from[p.idx[k]!]!.push(p.idx[(k + 1) % p.idx.length]!);
+    return (a, b) => from[a]!.includes(b);
+  };
+  const twinned = edgesFrom();
   polys = polys.map((p) => {
     const out: number[] = [];
     for (let k = 0; k < p.idx.length; k++) {
       const ia = p.idx[k]!;
       const ib = p.idx[(k + 1) % p.idx.length]!;
       out.push(ia);
-      if (twinned.has(ib * np + ia)) continue;
+      if (twinned(ib, ia)) continue;
       const a = pts[ia]!;
       const b = pts[ib]!;
-      const ab = sub(b, a);
-      const len2 = dot(ab, ab);
+      const abx = b.x - a.x;
+      const aby = b.y - a.y;
+      const abz = b.z - a.z;
+      const len2 = abx * abx + aby * aby + abz * abz;
       if (len2 === 0) continue;
       const onEdge: [number, number][] = [];
       for (const i of grid.near(a, b)) {
         if (i === ia || i === ib) continue;
-        const ap = sub(pts[i]!, a);
-        const t = dot(ap, ab) / len2;
+        const q = pts[i]!;
+        const apx = q.x - a.x;
+        const apy = q.y - a.y;
+        const apz = q.z - a.z;
+        const t = (apx * abx + apy * aby + apz * abz) / len2;
         if (t <= 1e-12 || t >= 1 - 1e-12) continue;
-        const d = sub(ap, scale(ab, t));
-        if (dot(d, d) <= tol * tol * 16) onEdge.push([t, i]);
+        const dx = apx - abx * t;
+        const dy = apy - aby * t;
+        const dz = apz - abz * t;
+        if (dx * dx + dy * dy + dz * dz <= tol * tol * 16) onEdge.push([t, i]);
       }
+      if (onEdge.length === 0) continue;
       onEdge.sort((x, y) => x[0] - y[0]);
       for (const [, i] of onEdge) out.push(i);
     }
@@ -229,8 +255,7 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
   //     vertex lying on it inserted (full scan, slightly looser tolerance),
   //     until the mesh closes up or nothing changes.
   for (let pass = 0; pass < 3; pass++) {
-    const directed = new Set<string>();
-    for (const p of polys) for (let k = 0; k < p.idx.length; k++) directed.add(`${p.idx[k]}|${p.idx[(k + 1) % p.idx.length]}`);
+    const directed = edgesFrom();
     let changed = false;
     const loose2 = (tol * 1e3) ** 2;
     polys = polys.map((p) => {
@@ -240,7 +265,7 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
         const ia = p.idx[k]!;
         const ib = p.idx[(k + 1) % p.idx.length]!;
         out.push(ia);
-        if (directed.has(`${ib}|${ia}`)) continue;
+        if (directed(ib, ia)) continue;
         const a = pts[ia]!;
         const ab = sub(pts[ib]!, a);
         const len2 = dot(ab, ab);

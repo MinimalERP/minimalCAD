@@ -288,6 +288,33 @@ function nearFar(polys: readonly Polygon[], box: { min: Vec3; max: Vec3 }): [Pol
   return [near, far];
 }
 
+/**
+ * The parts of `polys` inside `box`: what a classifying tree is built from.
+ * A tree made of a solid's whole surface inside a box tells inside from
+ * outside correctly anywhere in that box -- as long as every piece really
+ * lies in it (a long triangle only passing by would label space it never
+ * touches), hence the cut. Null if the solid has no surface in the box.
+ */
+function insideBox(polys: readonly Polygon[], box: { min: Vec3; max: Vec3 }): Polygon[] | null {
+  const planes: Plane[] = [
+    { normal: { x: 1, y: 0, z: 0 }, w: box.max.x },
+    { normal: { x: -1, y: 0, z: 0 }, w: -box.min.x },
+    { normal: { x: 0, y: 1, z: 0 }, w: box.max.y },
+    { normal: { x: 0, y: -1, z: 0 }, w: -box.min.y },
+    { normal: { x: 0, y: 0, z: 1 }, w: box.max.z },
+    { normal: { x: 0, y: 0, z: -1 }, w: -box.min.z },
+  ];
+  let inside = polys.slice();
+  for (const plane of planes) {
+    const kept: Polygon[] = [];
+    const dropped: Polygon[] = [];
+    for (const p of inside) splitPolygon(plane, p, kept, kept, dropped, kept);
+    inside = kept;
+    if (inside.length === 0) return null;
+  }
+  return inside;
+}
+
 /*
  * union / subtract: the csg.js sequences, but each solid's ORIGINAL polygons
  * are clipped through the other's tree (the trees only classify), instead
@@ -299,10 +326,12 @@ function nearFar(polys: readonly Polygon[], box: { min: Vec3; max: Vec3 }): [Pol
 
 export function union(a: Polygon[], b: Polygon[]): Polygon[] {
   return withEps(a, b, () => {
-    const A = new BspNode(a);
-    const B = new BspNode(b);
     const [aNear, aFar] = nearFar(a, boxOf(b, EPS * 10));
     const [bNear, bFar] = nearFar(b, boxOf(a, EPS * 10));
+    // Each tree is built from its solid's surface inside the other's box
+    // only: that is where every polygon it has to classify lies.
+    const A = new BspNode(insideBox(aNear, boxOf(b, EPS * 100)) ?? a);
+    const B = new BspNode(insideBox(bNear, boxOf(a, EPS * 100)) ?? b);
     // A.clipTo(B): A's parts inside B go.
     const aOut = B.clipPolygons(aNear);
     // B.clipTo(A); invert; clipTo(A); invert: B's parts inside A (and
@@ -315,14 +344,16 @@ export function union(a: Polygon[], b: Polygon[]): Polygon[] {
 
 export function subtract(a: Polygon[], b: Polygon[]): Polygon[] {
   return withEps(a, b, () => {
-    const Ainv = new BspNode(a.map(flip));
-    const B = new BspNode(b);
     const [aNear, aFar] = nearFar(a, boxOf(b, EPS * 10));
+    // B clear of A's box is dropped: outside A.
+    const [bNear] = nearFar(b, boxOf(a, EPS * 10));
+    // As in union: the trees only need each solid's surface near the other.
+    const Ainv = new BspNode((insideBox(aNear, boxOf(b, EPS * 100)) ?? a).map(flip));
+    const B = new BspNode(insideBox(bNear, boxOf(a, EPS * 100)) ?? b);
     // A.invert(); A.clipTo(B): A's parts inside B go (A kept flipped).
     const aOut = B.clipPolygons(aNear.map(flip));
     // B.clipTo(A); invert; clipTo(A); invert -- A being inverted: only B's
-    // parts inside A survive (B clear of A's box is dropped: outside A).
-    const [bNear] = nearFar(b, boxOf(a, EPS * 10));
+    // parts inside A survive.
     const b1 = Ainv.clipPolygons(bNear).map(flip);
     const b2 = Ainv.clipPolygons(b1);
     // A.build(B); A.invert(): everything flips back.
