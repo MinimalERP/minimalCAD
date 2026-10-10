@@ -27,7 +27,7 @@ import type { Entity } from "../entities/entity";
 import type { HoleFeature, PartData, PlaneRef } from "../part/types";
 import { DRAWING_SKETCH, emptyPart, isEdgeFeature, modelPlaneKind, nextId, parsePart, usesSketch } from "../part/types";
 import type { ModelPlaneRef } from "../part/types";
-import { rebuild, resolvePlane, sheetValues } from "../part/rebuild";
+import { rebuild, rebuildWork, resolvePlane, sheetValues } from "../part/rebuild";
 import type { RebuildResult } from "../part/rebuild";
 import { projectBodiesWithSources } from "../part/project";
 import { modelEdgeRef, modelRefResolver } from "../part/sketchRefs";
@@ -81,6 +81,9 @@ export class ModelController {
   private firstShow = true;
   /** The running 3D command (with its dialog), if any. */
   private active: ModelCommand | null = null;
+  /** "Rebuilding model..." over the view, and the rebuild waiting for it to be on screen. */
+  private busyEl: HTMLDivElement | null = null;
+  private waiting: (() => void) | null = null;
   /** New Sketch is a simple one-click pick (no dialog needed). */
   private pickingSketchPlane = false;
   private ctx: ModelContext;
@@ -130,13 +133,14 @@ export class ModelController {
 
   show(): void {
     this.view.resize();
-    this.refresh(true);
-    if (this.firstShow) {
-      this.firstShow = false;
-      this.view.setView("iso");
-    } else {
-      this.view.fitIfNeeded();
-    }
+    this.refreshSoon(true, () => {
+      if (this.firstShow) {
+        this.firstShow = false;
+        this.view.setView("iso");
+      } else {
+        this.view.fitIfNeeded();
+      }
+    });
     this.host.commandBar.setReady();
     this.view.canvas.focus();
   }
@@ -155,6 +159,57 @@ export class ModelController {
 
   private params(): ReadonlyMap<string, number> {
     return this.result?.params ?? new Map<string, number>();
+  }
+
+  /**
+   * refresh(), but a rebuild with real work to do first puts "Rebuilding
+   * model..." on screen: the build itself blocks the page, so the notice has
+   * to be painted before it starts (its spinner then turns on its own). A
+   * rebuild that is all remembered runs at once. `then` runs after either.
+   */
+  refreshSoon(force = false, then?: () => void): void {
+    const run = (): void => {
+      this.refresh(force);
+      then?.();
+    };
+    const pending = this.waiting;
+    if (pending !== null) {
+      // Already waiting to rebuild: this one takes its place, keeping what was to follow.
+      this.waiting = (): void => {
+        pending();
+        then?.();
+      };
+      return;
+    }
+    if (rebuildWork(this.part(), this.drawingEntities()) === 0) {
+      run();
+      return;
+    }
+    if (this.busyEl === null) {
+      this.busyEl = document.createElement("div");
+      this.busyEl.className = "model-busy";
+      this.busyEl.innerHTML = '<span class="model-busy-spin"></span><span>Rebuilding model…</span>';
+      this.view.canvas.parentElement!.appendChild(this.busyEl);
+    }
+    const el = this.busyEl;
+    el.classList.add("visible");
+    this.waiting = run;
+    let started = false;
+    const start = (): void => {
+      if (started) return;
+      started = true;
+      const work = this.waiting;
+      this.waiting = null;
+      try {
+        work?.();
+      } finally {
+        el.classList.remove("visible");
+      }
+    };
+    // Two frames: the notice is drawn in the first, the build starts in the second
+    // (the timer is for a page that is not being drawn, e.g. a background tab).
+    requestAnimationFrame(() => requestAnimationFrame(start));
+    setTimeout(start, 250);
   }
 
   /** Rebuilds if the part or the 2D drawing changed since the last build
@@ -225,7 +280,7 @@ export class ModelController {
     const part = this.part();
     mutate(part);
     engine.document.part = part;
-    this.refresh();
+    this.refreshSoon();
   }
 
   // --- commands ---

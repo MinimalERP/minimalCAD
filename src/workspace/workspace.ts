@@ -102,7 +102,7 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
       this.apply(session);
       return;
     }
-    if (session.workspace === "model") this.model?.refresh();
+    if (session.workspace === "model") this.model?.refreshSoon();
     // Opened a model file in 2D: offer Finish 2D / Drawing right away.
     else if (session.workspace === "drafting") this.apply(session);
   }

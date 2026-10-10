@@ -571,10 +571,8 @@ function featureSignature(feature: FeatureData, part: PartData): string {
   return fastHash(JSON.stringify([feature, sketchData, planeData]));
 }
 
-export function rebuild(part: PartData, drawingEntities: Record<string, unknown>[] = []): RebuildResult {
-  const params = resolveParameters(part.parameters);
-
-  // Compute prefix cache keys
+/** The cache key of the model before any feature, and after each one. */
+function cacheKeys(part: PartData, drawingEntities: Record<string, unknown>[]): { baseKey: string; stepKeys: string[] } {
   const baseKey = makeBaseKey(part, drawingEntities);
   const stepKeys: string[] = [];
   let prevKey = baseKey;
@@ -583,6 +581,20 @@ export function rebuild(part: PartData, drawingEntities: Record<string, unknown>
     stepKeys.push(nextKey);
     prevKey = nextKey;
   }
+  return { baseKey, stepKeys };
+}
+
+/** How many features a rebuild would have to work out (0 = all remembered: instant). */
+export function rebuildWork(part: PartData, drawingEntities: Record<string, unknown>[] = []): number {
+  const { stepKeys } = cacheKeys(part, drawingEntities);
+  for (let i = stepKeys.length - 1; i >= 0; i--) if (rebuildCache.has(stepKeys[i]!)) return stepKeys.length - 1 - i;
+  return stepKeys.length;
+}
+
+export function rebuild(part: PartData, drawingEntities: Record<string, unknown>[] = []): RebuildResult {
+  const params = resolveParameters(part.parameters);
+
+  const { baseKey, stepKeys } = cacheKeys(part, drawingEntities);
 
   // Find largest matching prefix in cache
   let matchedIndex = -1;

@@ -93,13 +93,14 @@ function splitPolygon(
     coplanarBack.push(poly);
     return;
   }
+  const { x: nx, y: ny, z: nz } = plane.normal;
+  const verts = poly.vertices;
+  const n = verts.length;
   let polyType = 0;
-  const types: number[] = [];
-  for (const v of poly.vertices) {
-    const t = dot(plane.normal, v) - plane.w;
-    const type = t < -EPS ? BACK : t > EPS ? FRONT : COPLANAR;
-    polyType |= type;
-    types.push(type);
+  for (let i = 0; i < n; i++) {
+    const v = verts[i]!;
+    const t = nx * v.x + ny * v.y + nz * v.z - plane.w;
+    polyType |= t < -EPS ? BACK : t > EPS ? FRONT : COPLANAR;
   }
   switch (polyType) {
     case COPLANAR:
@@ -113,15 +114,20 @@ function splitPolygon(
       return;
   }
   // SPANNING
+  const types: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const v = verts[i]!;
+    const t = nx * v.x + ny * v.y + nz * v.z - plane.w;
+    types.push(t < -EPS ? BACK : t > EPS ? FRONT : COPLANAR);
+  }
   const f: Vec3[] = [];
   const b: Vec3[] = [];
-  const n = poly.vertices.length;
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
     const ti = types[i]!;
     const tj = types[j]!;
-    const vi = poly.vertices[i]!;
-    const vj = poly.vertices[j]!;
+    const vi = verts[i]!;
+    const vj = verts[j]!;
     if (ti !== BACK) f.push(vi);
     if (ti !== FRONT) b.push(vi);
     if ((ti | tj) === SPANNING) {
@@ -184,25 +190,55 @@ class BspNode {
     }
   }
 
-  /** Removes the parts of `polygons` inside this tree's solid. */
+  /**
+   * Removes the parts of `polygons` inside this tree's solid. A polygon the
+   * tree cut up on the way but kept every piece of comes back whole: only
+   * what really loses a part is left in pieces (far fewer fragments for
+   * whatever turns the result back into a body).
+   */
   clipPolygons(polygons: Polygon[]): Polygon[] {
-    const out: Polygon[] = [];
-    const stack: [BspNode, Polygon[]][] = [[this, polygons]];
+    const pieces: Polygon[] = [];
+    const pieceOf: number[] = [];
+    const lost = new Uint8Array(polygons.length);
+    const stack: [BspNode, Polygon[], number[]][] = [[this, polygons, polygons.map((_, i) => i)]];
     while (stack.length > 0) {
-      const [node, polys] = stack.pop()!;
+      const [node, polys, origin] = stack.pop()!;
       if (node.plane === null) {
-        out.push(...polys);
+        for (let i = 0; i < polys.length; i++) {
+          pieces.push(polys[i]!);
+          pieceOf.push(origin[i]!);
+        }
         continue;
       }
-      let front: Polygon[] = [];
-      let back: Polygon[] = [];
-      for (const p of polys) splitPolygon(node.plane, p, front, back, front, back);
-      if (node.front !== null) stack.push([node.front, front]);
-      else out.push(...front);
-      if (node.back !== null) stack.push([node.back, back]);
+      const front: Polygon[] = [];
+      const back: Polygon[] = [];
+      const frontOf: number[] = [];
+      const backOf: number[] = [];
+      for (let i = 0; i < polys.length; i++) {
+        splitPolygon(node.plane, polys[i]!, front, back, front, back);
+        while (frontOf.length < front.length) frontOf.push(origin[i]!);
+        while (backOf.length < back.length) backOf.push(origin[i]!);
+      }
+      if (node.front !== null) stack.push([node.front, front, frontOf]);
+      else {
+        for (let i = 0; i < front.length; i++) {
+          pieces.push(front[i]!);
+          pieceOf.push(frontOf[i]!);
+        }
+      }
+      if (node.back !== null) stack.push([node.back, back, backOf]);
       // No back node: back polygons are inside the solid -- dropped.
-      front = [];
-      back = [];
+      else for (const o of backOf) lost[o] = 1;
+    }
+    const out: Polygon[] = [];
+    const whole = new Uint8Array(polygons.length);
+    for (let i = 0; i < pieces.length; i++) {
+      const o = pieceOf[i]!;
+      if (lost[o] === 1) out.push(pieces[i]!);
+      else if (whole[o] === 0) {
+        whole[o] = 1;
+        out.push(polygons[o]!);
+      }
     }
     return out;
   }

@@ -362,15 +362,23 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
     const fid = faceOf(p);
     const g = outFaces[fid]!.geom;
     const base = positions.length / 3;
+    const cylAxis = g.kind === "cylinder" ? normalize(g.axis) : null;
     for (const i of p.idx) {
       const v = pts[i]!;
       positions.push(v.x, v.y, v.z);
       let n = p.normal;
-      if (g.kind === "cylinder") {
-        const a = normalize(g.axis);
-        const d = sub(v, g.axisOrigin);
-        const radial = normalize(sub(d, scale(a, dot(d, a))));
-        n = dot(radial, p.normal) >= 0 ? radial : scale(radial, -1);
+      if (cylAxis !== null && g.kind === "cylinder") {
+        // Straight out from the axis (plain arithmetic: this runs per vertex).
+        const dx = v.x - g.axisOrigin.x;
+        const dy = v.y - g.axisOrigin.y;
+        const dz = v.z - g.axisOrigin.z;
+        const along = dx * cylAxis.x + dy * cylAxis.y + dz * cylAxis.z;
+        const rx = dx - cylAxis.x * along;
+        const ry = dy - cylAxis.y * along;
+        const rz = dz - cylAxis.z * along;
+        const len = Math.hypot(rx, ry, rz);
+        const sign = len > 0 ? (rx * p.normal.x + ry * p.normal.y + rz * p.normal.z >= 0 ? 1 / len : -1 / len) : 0;
+        n = { x: rx * sign, y: ry * sign, z: rz * sign };
       } else if (g.kind === "torus") {
         // From the tube circle's centre nearest this point.
         const a = normalize(g.axis);
@@ -388,15 +396,38 @@ export function polygonsToBody(id: string, feature: string, polygons: readonly P
   }
 
   // 4. Exact edges from face adjacency.
-  const edgeFace = new Map<string, number>(); // directed "a|b" -> face
+  //    Directed edges a -> b with the face on their left, in the order first
+  //    met; `from[a]` lists the edges leaving a (numbers only: this runs per edge).
+  const edgeA: number[] = [];
+  const edgeB: number[] = [];
+  const edgeFid: number[] = [];
+  const from: number[][] = Array.from({ length: pts.length }, () => []);
+  const edgeAt = (a: number, b: number): number => {
+    for (const e of from[a]!) if (edgeB[e] === b) return e;
+    return -1;
+  };
   for (const p of polys) {
     const fid = faceOf(p);
-    for (let k = 0; k < p.idx.length; k++) edgeFace.set(`${p.idx[k]}|${p.idx[(k + 1) % p.idx.length]}`, fid);
+    for (let k = 0; k < p.idx.length; k++) {
+      const a = p.idx[k]!;
+      const b = p.idx[(k + 1) % p.idx.length]!;
+      const e = edgeAt(a, b);
+      if (e >= 0) edgeFid[e] = fid;
+      else {
+        from[a]!.push(edgeA.length);
+        edgeA.push(a);
+        edgeB.push(b);
+        edgeFid.push(fid);
+      }
+    }
   }
   const segments = new Map<string, [number, number][]>(); // face pair -> undirected segments
-  for (const [key, fid] of edgeFace) {
-    const [a, b] = key.split("|").map(Number) as [number, number];
-    const twin = edgeFace.get(`${b}|${a}`);
+  for (let e = 0; e < edgeA.length; e++) {
+    const a = edgeA[e]!;
+    const b = edgeB[e]!;
+    const fid = edgeFid[e]!;
+    const t = edgeAt(b, a);
+    const twin = t < 0 ? undefined : edgeFid[t]!;
     if (twin === fid) continue; // interior to one face
     if (twin !== undefined && twin < fid) continue; // counted from the other side
     const pair = `${fid}|${twin ?? -1}`;
