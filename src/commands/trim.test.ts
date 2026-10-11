@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeTestEngine } from "../testUtils/fakeEngine";
-import { TrimCommand } from "./trim";
+import { ExtendCommand, TrimCommand } from "./trim";
 import { Line } from "../entities/line";
 import { Circle } from "../entities/circle";
 import { Arc } from "../entities/arc";
@@ -11,6 +11,8 @@ import { Ellipse } from "../entities/ellipse";
 // gap-tolerance near-touch trimming, merge-not-fragment on multi-crossing
 // survivors, and whole-entity deletion when a line's only cutting edges
 // touch it exactly at its own two endpoints (e.g. a rectangle corner).
+import { RectangleCommand } from "./rectangle";
+import { Polyline } from "../entities/polyline";
 
 describe("TrimCommand", () => {
   it("a click near an entity with no real cutting edge nearby does nothing", () => {
@@ -138,5 +140,122 @@ describe("TrimCommand", () => {
     const xs = [remnant!.startPoint.x, remnant!.endPoint.x].sort((a, b) => a - b);
     expect(xs[0]).toBeCloseTo(-50, 6);
     expect(xs[1]).toBeCloseTo(20, 2);
+  });
+});
+
+describe("TrimCommand: dragging, and polylines", () => {
+  const L = (x1: number, y1: number, x2: number, y2: number) => new Line({ x: x1, y: y1 }, { x: x2, y: y2 });
+
+  it("a drag trims everything the stroke crosses, as one undo step", () => {
+    const engine = makeTestEngine();
+    for (const l of [L(-50, 0, 50, 0), L(-50, 10, 50, 10), L(-10, -20, -10, 30), L(10, -20, 10, 30)]) engine.document.addEntity(l);
+    const cmd = new TrimCommand(engine);
+    cmd.start();
+    cmd.leftClick({ x: 0, y: -15 }); // on nothing
+    cmd.mouseMove({ x: 0, y: 5 }); // across the first horizontal
+    cmd.mouseMove({ x: 0, y: 15 }); // and the second
+    cmd.leftRelease();
+
+    const horizontals = engine.document.entities.filter((e): e is Line => e instanceof Line && e.startPoint.y === e.endPoint.y);
+    expect(horizontals).toHaveLength(4); // each lost its middle, between the two verticals
+    for (const h of horizontals) expect(Math.min(Math.abs(h.startPoint.x), Math.abs(h.endPoint.x))).toBeCloseTo(10, 6);
+    expect(engine.document.entities).toHaveLength(6);
+
+    engine.document.restoreFromDict(engine.undo.undo(engine.document.toDict())!);
+    expect(engine.document.entities).toHaveLength(4);
+    expect(engine.undo.undo(engine.document.toDict())).toBeNull();
+  });
+
+  it("moving without the button held trims nothing", () => {
+    const engine = makeTestEngine();
+    for (const l of [L(-50, 0, 50, 0), L(-10, -20, -10, 30), L(10, -20, 10, 30)]) engine.document.addEntity(l);
+    const cmd = new TrimCommand(engine);
+    cmd.start();
+    cmd.mouseMove({ x: 0, y: -5 });
+    cmd.mouseMove({ x: 0, y: 5 });
+    expect(engine.document.entities).toHaveLength(3);
+  });
+
+  it("a rectangle cuts a line through it, and its own side can be trimmed: what is left stays one outline", () => {
+    const engine = makeTestEngine();
+    const rc = new RectangleCommand(engine);
+    rc.start();
+    rc.leftClick({ x: 0, y: 0 });
+    rc.leftClick({ x: 100, y: 50 });
+    rc.cancel();
+    engine.document.addEntity(L(50, -20, 50, 70));
+    const cmd = new TrimCommand(engine);
+    cmd.start();
+
+    // the line's part inside the rectangle goes: the rectangle's sides are the cutting edges
+    cmd.leftClick({ x: 50, y: 25 });
+    cmd.leftRelease();
+    const lines = () => engine.document.entities.filter((e): e is Line => e instanceof Line);
+    expect(lines()).toHaveLength(2);
+    expect(engine.document.entities.filter((e) => e instanceof Polyline)).toHaveLength(1);
+
+    // the left half of the bottom side goes, up to where the line meets it
+    cmd.leftClick({ x: 25, y: 0 });
+    cmd.leftRelease();
+    const outlines = engine.document.entities.filter((e): e is Polyline => e instanceof Polyline);
+    expect(outlines).toHaveLength(1);
+    expect(outlines[0]!.closed).toBe(false);
+    expect(outlines[0]!.vertices).toHaveLength(5);
+    expect(lines()).toHaveLength(2); // the two loose pieces of the line were not swallowed
+  });
+});
+
+describe("TrimCommand: fence, extend", () => {
+  const L = (x1: number, y1: number, x2: number, y2: number) => new Line({ x: x1, y: y1 }, { x: x2, y: y2 });
+
+  it("two clicks on empty space make a fence: everything the line between them crosses is trimmed, as one undo step", () => {
+    const engine = makeTestEngine();
+    for (const l of [L(-50, 0, 50, 0), L(-50, 10, 50, 10), L(-10, -20, -10, 30), L(10, -20, 10, 30)]) engine.document.addEntity(l);
+    const cmd = new TrimCommand(engine);
+    cmd.start();
+    cmd.leftClick({ x: 0, y: -15 });
+    cmd.leftRelease(); // a click, not a drag: the fence starts here
+    expect(engine.document.entities).toHaveLength(4);
+    cmd.mouseMove({ x: 0, y: 15 });
+    cmd.leftClick({ x: 0, y: 15 });
+    cmd.leftRelease();
+    expect(engine.document.entities).toHaveLength(6);
+    engine.document.restoreFromDict(engine.undo.undo(engine.document.toDict())!);
+    expect(engine.document.entities).toHaveLength(4);
+  });
+
+  it("Shift extends instead: the end of a line nearest the click runs out to the next edge", () => {
+    const engine = makeTestEngine();
+    const short = L(0, 0, 30, 0);
+    engine.document.addEntity(short);
+    engine.document.addEntity(L(50, -20, 50, 20)); // the edge in its way
+    engine.document.addEntity(L(80, -20, 80, 20)); // a farther one
+    const cmd = new TrimCommand(engine);
+    cmd.start();
+    engine.shiftHeld = true;
+    cmd.leftClick({ x: 25, y: 0 }); // near its right end
+    cmd.leftRelease();
+    expect(short.endPoint.x).toBeCloseTo(50, 6);
+    expect(short.startPoint.x).toBe(0);
+    engine.shiftHeld = false;
+  });
+
+  it("EXTEND extends on a plain click, an arc too, and says so when nothing is in the way", () => {
+    const engine = makeTestEngine();
+    const arc = new Arc({ x: 0, y: 0 }, 10, 0, Math.PI / 2); // from (10,0) round to (0,10)
+    engine.document.addEntity(arc);
+    engine.document.addEntity(L(-20, 0, -5, 0)); // the circle the arc lies on meets it at (-10,0)
+    const cmd = new ExtendCommand(engine);
+    cmd.start();
+    cmd.leftClick({ x: 10 * Math.cos(1.4), y: 10 * Math.sin(1.4) }); // near the arc's end
+    cmd.leftRelease();
+    expect(arc.endAngle).toBeCloseTo(Math.PI, 6);
+    expect(arc.startAngle).toBeCloseTo(0, 6);
+
+    const lonely = L(100, 100, 120, 100);
+    engine.document.addEntity(lonely);
+    cmd.leftClick({ x: 118, y: 100 });
+    cmd.leftRelease();
+    expect(lonely.endPoint.x).toBe(120);
   });
 });

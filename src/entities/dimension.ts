@@ -21,7 +21,7 @@
  */
 
 import type { Bounds, Point } from "../core/types";
-import { pointAdd, pointSub } from "../core/types";
+import { pointAdd } from "../core/types";
 import type { Entity, Viewport } from "./entity";
 import { COLOR_SELECTED, COLOR_GRIP, gripScreenSize, rotatePoint } from "./style";
 import { FONT_FAMILY, measureText } from "./textMetrics";
@@ -29,14 +29,26 @@ import { Viewport as ViewportClass } from "../engine/viewport";
 import { Line } from "./line";
 import { Arc } from "./arc";
 import { Text } from "./text";
+import { Polyline } from "./polyline";
 
 export type DimType = "linear" | "aligned" | "angular" | "diameter" | "radius" | "leader";
 
-const TEXT_HEIGHT = 3.5;
-const ARROW_SIZE = 2.0;
+/** Text height of a dimension at scale 1 (world units); every other size
+ *  below is in proportion to it, the way a drafting standard sets them. */
+export const DIM_TEXT_HEIGHT = 3.5;
+const TEXT_HEIGHT = DIM_TEXT_HEIGHT;
+/** Arrowhead: a filled, closed triangle three times as long as it is wide. */
+const ARROW_SIZE = 3.0;
+const ARROW_HALF_WIDTH = ARROW_SIZE / 6.0;
 const EXTENSION_GAP = 1.0;
+/** How far an extension line runs past the dimension line. */
+const EXTENSION_BEYOND = 1.5;
 const TEXT_GAP = 1.0;
-const LINE_OFFSET = 8.0;
+/** The short horizontal shoulder a diameter / radius dimension ends in,
+ *  beside its text. It is never longer than half the way from the centre to
+ *  the text, so text placed close in gets a shorter shoulder, not a line
+ *  doubling back. */
+const LANDING = 4.0;
 const COLOR_NORMAL = "#ffffff";
 
 type DimValue = Point | number | string;
@@ -112,6 +124,9 @@ export class Dimension implements Entity {
   private scale = 1.0;
   private lastText = "";
   private cachedSegments: Segment[] = [];
+  /** Each arrowhead's three corners (tip first), kept apart from the plain
+   *  line segments so an export gets it as ONE closed shape. */
+  private cachedArrows: [Point, Point, Point][] = [];
   private cachedRects: RectW[] = [];
   private cachedArcs: ArcW[] = [];
 
@@ -152,15 +167,17 @@ export class Dimension implements Entity {
 
   // --- Draw dispatch ---
 
-  draw(ctx: CanvasRenderingContext2D, viewport: Viewport, preview = false): void {
+  draw(ctx: CanvasRenderingContext2D, viewport: Viewport, preview = false, color: string = COLOR_NORMAL): void {
     this.cachedSegments = [];
+    this.cachedArrows = [];
     this.cachedRects = [];
     this.cachedArcs = [];
     this.scale = this.num("scale", 1.0);
+    this.edgeAt = null;
 
     ctx.save();
-    ctx.strokeStyle = COLOR_NORMAL;
-    ctx.fillStyle = COLOR_NORMAL;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
     ctx.lineWidth = 1;
     ctx.setLineDash(preview ? [6, 4] : []);
 
@@ -189,11 +206,7 @@ export class Dimension implements Entity {
   }
 
   drawSelected(ctx: CanvasRenderingContext2D, viewport: Viewport): void {
-    ctx.save();
-    ctx.strokeStyle = COLOR_SELECTED;
-    ctx.fillStyle = COLOR_SELECTED;
-    this.draw(ctx, viewport, false);
-    ctx.restore();
+    this.draw(ctx, viewport, false, COLOR_SELECTED);
 
     const grip = gripScreenSize();
     ctx.save();
@@ -225,17 +238,31 @@ export class Dimension implements Entity {
     }
   }
 
+  /** A filled arrowhead with its point on `tip`, pointing along `angleDeg`. */
   private arrowhead(ctx: CanvasRenderingContext2D, viewport: Viewport, tip: Point, angleDeg: number): void {
     const rad = (angleDeg * Math.PI) / 180;
     const arrow = ARROW_SIZE * this.scale;
     const pBase = { x: tip.x - arrow * Math.cos(rad), y: tip.y - arrow * Math.sin(rad) };
     const nx = -Math.sin(rad);
     const ny = Math.cos(rad);
-    const halfW = arrow / 2.0;
+    const halfW = ARROW_HALF_WIDTH * this.scale;
     const pt1 = { x: pBase.x + nx * halfW, y: pBase.y + ny * halfW };
     const pt2 = { x: pBase.x - nx * halfW, y: pBase.y - ny * halfW };
-    this.line(ctx, viewport, tip, pt1);
-    this.line(ctx, viewport, tip, pt2);
+    // Its outline is what picking, bounds and DXF export see.
+    this.cachedArrows.push([tip, pt1, pt2]);
+    const s0 = viewport.worldToScreen(tip);
+    const s1 = viewport.worldToScreen(pt1);
+    const s2 = viewport.worldToScreen(pt2);
+    ctx.save();
+    ctx.setLineDash([]); // solid even on a dashed preview
+    ctx.beginPath();
+    ctx.moveTo(s0.x, s0.y);
+    ctx.lineTo(s1.x, s1.y);
+    ctx.lineTo(s2.x, s2.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
   }
 
   private textRectFor(basePt: Point, text: string): RectW {
@@ -358,6 +385,7 @@ export class Dimension implements Entity {
     this.lastText = txt;
 
     const extGap = EXTENSION_GAP * this.scale;
+    const beyond = EXTENSION_BEYOND * this.scale;
     const arrow = ARROW_SIZE * this.scale;
     for (const [p, d, off] of [
       [p1, d1, off1],
@@ -365,7 +393,7 @@ export class Dimension implements Entity {
     ] as const) {
       const sgn = off >= 0 ? 1 : -1;
       if (Math.abs(off) <= extGap) continue; // measured right on the dimension line
-      this.line(ctx, viewport, { x: p.x + n.x * sgn * extGap, y: p.y + n.y * sgn * extGap }, { x: d.x + n.x * sgn * arrow, y: d.y + n.y * sgn * arrow });
+      this.line(ctx, viewport, { x: p.x + n.x * sgn * extGap, y: p.y + n.y * sgn * extGap }, { x: d.x + n.x * sgn * beyond, y: d.y + n.y * sgn * beyond });
     }
 
     const tw = measureText(txt, TEXT_HEIGHT * this.scale).width + TEXT_GAP * this.scale * 2.0;
@@ -471,8 +499,48 @@ export class Dimension implements Entity {
     const txt = this.str("text_override") || computed;
     this.lastText = txt;
 
-    this.drawLeaderShaft(ctx, viewport, edgePt, tp, txt);
+    // The shoulder beside the text, kept on the text's side of the centre.
+    const away = tp.x >= center.x ? 1.0 : -1.0;
+    const landing = Math.min(LANDING * this.scale, Math.abs(tp.x - center.x) / 2);
+    const elbow = { x: tp.x - away * landing, y: tp.y };
+
+    // The dimension line is RADIAL: it runs along the line from the centre
+    // through the elbow, so its arrow meets the curve square-on wherever
+    // the text is put (the stored radius_point only says how big the curve is).
+    let u = { x: elbow.x - center.x, y: elbow.y - center.y };
+    const reach = Math.hypot(u.x, u.y);
+    if (reach < 1e-9) u = { x: (edgePt.x - center.x) / radius, y: (edgePt.y - center.y) / radius };
+    else u = { x: u.x / reach, y: u.y / reach };
+    const edge = { x: center.x + u.x * radius, y: center.y + u.y * radius };
+    this.edgeAt = edge;
+    const outward = (Math.atan2(u.y, u.x) * 180) / Math.PI;
+    const arrow = ARROW_SIZE * this.scale;
+
+    // Text inside the curve -- or so close outside it that an arrow would
+    // not fit between the curve and the shoulder: the arrows go inside,
+    // pointing out, on a line across the whole diameter (or from the centre,
+    // for a radius). Otherwise one arrow outside, pointing in at the curve.
+    const inside = reach < radius;
+    if (inside || reach - radius < arrow * 1.5) {
+      if (isDiameter) {
+        const far = { x: center.x - u.x * radius, y: center.y - u.y * radius };
+        this.line(ctx, viewport, far, edge);
+        this.arrowhead(ctx, viewport, far, outward + 180.0);
+      } else {
+        this.line(ctx, viewport, center, edge);
+      }
+      this.arrowhead(ctx, viewport, edge, outward);
+      if (!inside) this.line(ctx, viewport, edge, elbow);
+    } else {
+      this.arrowhead(ctx, viewport, edge, outward + 180.0);
+      this.line(ctx, viewport, edge, elbow);
+    }
+    if (landing > 0) this.line(ctx, viewport, elbow, tp);
+    this.leaderText(ctx, viewport, tp, txt, away);
   }
+
+  /** Where a diameter / radius dimension's arrow last met its curve. */
+  private edgeAt: Point | null = null;
 
   private drawLeader(ctx: CanvasRenderingContext2D, viewport: Viewport): void {
     const pt = this.p("point");
@@ -480,29 +548,11 @@ export class Dimension implements Entity {
     const txt = this.str("text") ?? "";
     this.lastText = txt;
 
-    this.drawLeaderShaft(ctx, viewport, pt, tp, txt);
-  }
-
-  private drawLeaderShaft(ctx: CanvasRenderingContext2D, viewport: Viewport, pt: Point, tp: Point, txt: string): void {
+    // A leader is ONE plain line and its text, nothing else: no arrowhead
+    // and no shoulder, so it exports to DXF as a single line and a text.
     if (dist(pt, tp) === 0) return;
-
-    const lineOffset = LINE_OFFSET * this.scale;
-    const away = tp.x >= pt.x ? 1.0 : -1.0;
-    const landingStart = { x: tp.x - away * lineOffset, y: tp.y };
-
-    const leaderVec = pointSub(pt, landingStart);
-    let angDeg: number;
-    if (leaderVec.x === 0 && leaderVec.y === 0) {
-      angDeg = (Math.atan2(pt.y - tp.y, pt.x - tp.x) * 180) / Math.PI;
-    } else {
-      angDeg = (Math.atan2(leaderVec.y, leaderVec.x) * 180) / Math.PI;
-    }
-    this.arrowhead(ctx, viewport, pt, angDeg);
-
-    this.line(ctx, viewport, pt, landingStart);
-    this.line(ctx, viewport, landingStart, tp);
-
-    this.leaderText(ctx, viewport, tp, txt, away);
+    this.line(ctx, viewport, pt, tp);
+    this.leaderText(ctx, viewport, tp, txt, tp.x >= pt.x ? 1.0 : -1.0);
   }
 
   // --- Interaction (move/rotate/copy/hitTest/bounds/grips) ---
@@ -547,6 +597,9 @@ export class Dimension implements Entity {
     for (const { p1, p2 } of this.cachedSegments) {
       if (distanceToSegment(pt, p1, p2) <= tolerance) return true;
     }
+    for (const [a, b, c] of this.cachedArrows) {
+      if (distanceToSegment(pt, a, b) <= tolerance || distanceToSegment(pt, b, c) <= tolerance || distanceToSegment(pt, c, a) <= tolerance) return true;
+    }
     for (const [x0, y0, x1, y1] of this.cachedRects) {
       if (pt.x >= x0 - tolerance && pt.x <= x1 + tolerance && pt.y >= y0 - tolerance && pt.y <= y1 + tolerance) {
         return true;
@@ -567,6 +620,7 @@ export class Dimension implements Entity {
     // extension lines count (zoom extents, window selection).
     const points = [...this.getGripPoints()];
     for (const s of this.cachedSegments) points.push(s.p1, s.p2);
+    for (const a of this.cachedArrows) points.push(...a);
     for (const [x0, y0, x1, y1] of this.cachedRects) points.push({ x: x0, y: y0 }, { x: x1, y: y1 });
     if (points.length === 0) return [0, 0, 0, 0];
     const xs = points.map((p) => p.x);
@@ -619,7 +673,7 @@ export class Dimension implements Entity {
       case "radius":
         return [
           ["center", this.p("center")],
-          ["radius_point", this.p("radius_point")],
+          ["radius_point", this.edgeAt ?? this.p("radius_point")],
           ["text_position", this.p("text_position")],
         ];
       case "leader":
@@ -647,6 +701,16 @@ export class Dimension implements Entity {
 
   getDisplayText(): string {
     return this.lastText;
+  }
+
+  /** Its text height in world units -- the one size everything else on a
+   *  dimension (arrows, gaps, shoulder) is in proportion to. */
+  get textHeight(): number {
+    return TEXT_HEIGHT * this.num("scale", 1.0);
+  }
+
+  set textHeight(h: number) {
+    this.data.scale = Math.max(h, 0.01) / TEXT_HEIGHT;
   }
 
   setTextOverride(text: string): void {
@@ -677,7 +741,9 @@ export class Dimension implements Entity {
       beginPath: noop,
       moveTo: noop,
       lineTo: noop,
+      closePath: noop,
       stroke: noop,
+      fill: noop,
       arc: noop,
       fillText: noop,
       setLineDash: noop,
@@ -687,10 +753,14 @@ export class Dimension implements Entity {
 
     const entities: Entity[] = [];
     for (const { p1, p2 } of this.cachedSegments) entities.push(new Line(p1, p2));
+    // an arrowhead is one closed triangle, not three loose lines
+    for (const corners of this.cachedArrows) {
+      entities.push(new Polyline(corners.map((point) => ({ point: { ...point }, bulge: 0 })), true));
+    }
     for (const { center, radius, start, end } of this.cachedArcs) entities.push(new Arc(center, radius, start, end));
     const rect = this.cachedRects[0];
     if (rect !== undefined && this.lastText !== "") {
-      entities.push(new Text({ x: rect[0], y: rect[3] }, this.lastText, TEXT_HEIGHT));
+      entities.push(new Text({ x: rect[0], y: rect[3] }, this.lastText, TEXT_HEIGHT * this.scale));
     }
     return entities;
   }

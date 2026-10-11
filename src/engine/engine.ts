@@ -26,6 +26,7 @@ import type { Constraint } from "../core/constraints";
 import { QuickEditController } from "./quickEdit";
 import type { Entity } from "../entities/entity";
 import { boundsOf } from "../core/document";
+import { Dimension, DIM_TEXT_HEIGHT } from "../entities/dimension";
 
 export interface SnapResult {
   point: Point;
@@ -75,11 +76,45 @@ export class Engine {
    *  sheet's view scale (drawing/). */
   dimensionStyle: ((anchor: Point | null) => Record<string, number>) | null = null;
 
+  /** Is Shift down (as of the last mouse event on the canvas)? TRIM and
+   *  EXTEND swap their action while it is. */
+  shiftHeld = false;
+
+  /** The size last typed for a dimension (its `scale`): the next ones placed
+   *  in this drawing start at that size. A drawing sheet's own style wins. */
+  dimScale: number | null = null;
+
+  /** The size the drawing's dimensions already have (the last one placed),
+   *  so a new one matches them. */
+  private drawingDimScale(): number | null {
+    const entities = this.document.getEntities();
+    for (let i = entities.length - 1; i >= 0; i--) {
+      const e = entities[i];
+      if (e instanceof Dimension) return typeof e.data.scale === "number" ? e.data.scale : 1;
+    }
+    return null;
+  }
+
+  /** For the first dimension of a drawing: the standard text height (2.5,
+   *  3.5, 5, 7, 10, 14, 20 and their tens) that reads at about 13 px in the
+   *  view it is placed in -- a 300 mm part gets larger lettering than a
+   *  10 mm one, instead of 3.5 units whatever the drawing's size. */
+  private readableDimScale(): number {
+    const wanted = 13 / (this.viewport.zoom || 1);
+    const decade = Math.pow(10, Math.floor(Math.log10(wanted / 2.5)));
+    let best = 2.5 * decade;
+    for (const h of [2.5, 3.5, 5, 7, 10, 14, 20, 25]) {
+      if (Math.abs(h * decade - wanted) < Math.abs(best - wanted)) best = h * decade;
+    }
+    return best / DIM_TEXT_HEIGHT;
+  }
+
   /** `data` for a new dimension (its live preview too), with this drawing's
    *  dimension settings applied -- so the value shown while placing it is
    *  the value it keeps. */
   styleDimension<T extends Record<string, unknown>>(data: T): T {
     const out: Record<string, unknown> = { ...data };
+    out.scale = this.dimScale ?? this.drawingDimScale() ?? this.readableDimScale();
     if (this.dimPrecision === "auto") out.trim_zeros = 1;
     else if (typeof this.dimPrecision === "number") out.precision = this.dimPrecision;
     if (this.dimensionStyle !== null) {

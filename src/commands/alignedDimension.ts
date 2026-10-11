@@ -13,6 +13,7 @@ import type { Point } from "../core/types";
 import { pointDistance } from "../core/types";
 import type { Engine } from "../engine/engine";
 import { BaseCommand } from "./base";
+import { lineUnder } from "./lineUnder";
 import { Dimension } from "../entities/dimension";
 
 export class AlignedDimensionCommand extends BaseCommand {
@@ -30,14 +31,27 @@ export class AlignedDimensionCommand extends BaseCommand {
     this.p1 = null;
     this.p2 = null;
     this.currentMousePos = null;
-    this.commandBar.setStatus("DIMALIGNED", "Pick first point");
+    this.commandBar.setStatus("DIMALIGNED", "Click a line to dimension it - or pick the first point");
   }
 
   leftClick(worldPos: Point): void {
     const reference = this.state === 1 ? this.p1 : null;
-    const { point } = this.engine.snap(worldPos, reference);
+    const { point, snapType } = this.engine.snap(worldPos, reference);
 
     if (this.state === 0) {
+      // A click ON a line -- anywhere along it, its middle included, but not
+      // on an end, a crossing or a centre, which are point picks: the whole
+      // line is what is dimensioned, its two ends, straight to placing the text.
+      const pointPick = snapType === "ENDPOINT" || snapType === "INTERSECTION" || snapType === "CENTER" || snapType === "QUADRANT";
+      const whole = pointPick ? null : lineUnder(this.engine, worldPos);
+      if (whole !== null) {
+        this.p1 = whole.startPoint;
+        this.p2 = whole.endPoint;
+        this.state = 2;
+        this.commandBar.setStatus("DIMALIGNED", "Place dimension line");
+        this.engine.requestRedraw();
+        return;
+      }
       this.p1 = point;
       this.state = 1;
       this.commandBar.setStatus("DIMALIGNED", "Pick second point");

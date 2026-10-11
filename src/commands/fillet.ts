@@ -18,6 +18,9 @@
 import type { Point } from "../core/types";
 import type { Engine } from "../engine/engine";
 import { BaseCommand } from "./base";
+import type { Entity } from "../entities/entity";
+import { Polyline } from "../entities/polyline";
+import { PolylineCorners } from "./polylineCorners";
 import { Line } from "../entities/line";
 import { Arc } from "../entities/arc";
 import { entityAt } from "../engine/picking";
@@ -56,11 +59,17 @@ export class FilletCommand extends BaseCommand {
   private click2: Point | null = null;
   private radius = 10.0;
 
+  /** A rectangle (any polyline) clicked is opened into its sides for the
+   *  command and joined back into one outline when it ends. */
+  private corners: PolylineCorners;
+
   constructor(engine: Engine) {
     super(engine);
+    this.corners = new PolylineCorners(engine);
   }
 
   start(): void {
+    this.corners.close();
     this.state = 0;
     this.entity1 = null;
     this.entity2 = null;
@@ -71,11 +80,16 @@ export class FilletCommand extends BaseCommand {
     this.engine.requestRedraw();
   }
 
+  pick(): (entity: Entity) => boolean {
+    return (e) => e !== this.entity1 && (this.isFilletable(e) || e instanceof Polyline);
+  }
+
   private isFilletable(e: unknown): e is FilletEntity {
     return e instanceof Line || e instanceof Arc;
   }
 
   leftClick(worldPos: Point): void {
+    this.corners.openAt(worldPos);
     const candidates = this.document.getEntities().filter((e) => this.isFilletable(e)) as FilletEntity[];
     if (this.state === 0) {
       const hit = entityAt(candidates, worldPos, this.engine.pickTolerance());
@@ -162,7 +176,7 @@ export class FilletCommand extends BaseCommand {
     const t1: Point = { x: intersection.x + u1.x * tangentDist, y: intersection.y + u1.y * tangentDist };
     const t2: Point = { x: intersection.x + u2.x * tangentDist, y: intersection.y + u2.y * tangentDist };
 
-    this.undo.push(this.document.toDict());
+    this.undo.push(this.corners.undoState());
     this.document.removeEntity(l1);
     this.document.removeEntity(l2);
     this.document.addEntity(new Line(t1, kept1, { lineType: l1.lineType }));
@@ -234,7 +248,7 @@ export class FilletCommand extends BaseCommand {
     const keptLineEnd = lineParam(line.startPoint, line.endPoint, lineClick) > tParam ? line.endPoint : line.startPoint;
     const [keptArcStart, keptArcEnd] = keptArcSpan(arc, tArcAngle, arcClick);
 
-    this.undo.push(this.document.toDict());
+    this.undo.push(this.corners.undoState());
     this.document.removeEntity(line);
     this.document.removeEntity(arc);
     this.document.addEntity(new Line(tLine, keptLineEnd, { lineType: line.lineType }));
@@ -286,7 +300,7 @@ export class FilletCommand extends BaseCommand {
     const [start1, end1] = keptArcSpan(arc1, tan1.angle, click1);
     const [start2, end2] = keptArcSpan(arc2, tan2.angle, click2);
 
-    this.undo.push(this.document.toDict());
+    this.undo.push(this.corners.undoState());
     this.document.removeEntity(arc1);
     this.document.removeEntity(arc2);
     this.document.addEntity(new Arc(arc1.center, arc1.radius, start1, end1, { lineType: arc1.lineType }));
@@ -304,6 +318,7 @@ export class FilletCommand extends BaseCommand {
   }
 
   cancel(): void {
+    this.corners.close();
     this.state = 0;
     this.entity1 = null;
     this.entity2 = null;

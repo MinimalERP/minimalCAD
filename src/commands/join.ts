@@ -331,6 +331,45 @@ function tryJoin(e1: Joinable, e2: Joinable, degreeMap: Map<string, number> | nu
   return tryConnect(e1, e2, degreeMap);
 }
 
+/** Repeatedly merges any joinable/connectable pair within `entities` until
+ *  none is left: what they come to, and how many merges it took. The
+ *  entities themselves are not changed. */
+export function joinAll(entities: Entity[]): { result: Entity[]; joinCount: number } {
+  // Entity, not Joinable: a merge can produce a Circle (two Arcs closing
+  // the full circle), which then just sits inert in `working` -- like
+  // every other non-Joinable type, isJoinable() below skips ever pairing
+  // it again, the same graceful no-op commands/join.py's own duck-typed
+  // _endpoints_of()/_as_open_segments() (both return None for a Circle)
+  // fall through to.
+  const working: Entity[] = [...entities];
+  let joinCount = 0;
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    const degreeMap = endpointDegreeMap(working);
+    const n = working.length;
+    outer: for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const left = working[i]!;
+        const right = working[j]!;
+        if (!isJoinable(left) || !isJoinable(right)) continue;
+        const { merged } = tryJoin(left, right, degreeMap);
+        if (merged !== null) {
+          // Remove the higher index first so the lower index stays valid.
+          working.splice(j, 1);
+          working.splice(i, 1);
+          working.push(merged);
+          joinCount++;
+          changed = true;
+          break outer;
+        }
+      }
+    }
+  }
+  return { result: working, joinCount };
+}
+
 export class JoinCommand extends BaseCommand {
   private state: 0 | 1 = 0;
   private entity1: Joinable | null = null;
@@ -352,6 +391,10 @@ export class JoinCommand extends BaseCommand {
     this.commandBar.setStatus("JOIN", "Select first line/arc/polyline (or window-select several, then run JOIN)");
     this.commandBar.enableInput();
     this.engine.requestRedraw();
+  }
+
+  pick(): (entity: Entity) => boolean {
+    return (e) => e !== this.entity1 && isJoinable(e);
   }
 
   leftClick(worldPos: Point): void {
@@ -411,38 +454,7 @@ export class JoinCommand extends BaseCommand {
    *  each pass, since it must reflect `working`'s current entities -- a
    *  merge changes which points are still free endpoints. */
   private runBulkJoin(entities: Joinable[]): void {
-    // Entity, not Joinable: a merge can produce a Circle (two Arcs closing
-    // the full circle), which then just sits inert in `working` -- like
-    // every other non-Joinable type, isJoinable() below skips ever pairing
-    // it again, the same graceful no-op commands/join.py's own duck-typed
-    // _endpoints_of()/_as_open_segments() (both return None for a Circle)
-    // fall through to.
-    const working: Entity[] = [...entities];
-    let joinCount = 0;
-    let changed = true;
-
-    while (changed) {
-      changed = false;
-      const degreeMap = endpointDegreeMap(working);
-      const n = working.length;
-      outer: for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-          const left = working[i]!;
-          const right = working[j]!;
-          if (!isJoinable(left) || !isJoinable(right)) continue;
-          const { merged } = tryJoin(left, right, degreeMap);
-          if (merged !== null) {
-            // Remove the higher index first so the lower index stays valid.
-            working.splice(j, 1);
-            working.splice(i, 1);
-            working.push(merged);
-            joinCount++;
-            changed = true;
-            break outer;
-          }
-        }
-      }
-    }
+    const { result: working, joinCount } = joinAll(entities);
 
     this.engine.selection.clear();
     this.state = 0;

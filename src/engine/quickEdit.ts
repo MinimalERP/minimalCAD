@@ -13,26 +13,26 @@
  * different from a Command's explicit startCommand() activation, exactly as
  * the Python source's own header comment explains.
  *
- * Scoped to Line/Text for now: Circle already has grip-drag resize
- * (commands/grips/circleResizeGrip.ts), and Dimension's `scale` is cached
- * into a private field at construction rather than read live off `data`
- * (see entities/dimension.ts), so quick-editing it would need its own
- * follow-up change there first -- not part of this port.
+ * A Dimension (a leader too) is edited the same way as a Text: its one live
+ * property is its text height, and its arrows, gaps and shoulder follow in
+ * proportion. The size typed is also what the next dimensions start at.
+ * Circle already has grip-drag resize (commands/grips/circleResizeGrip.ts).
  */
 
 import type { Engine } from "./engine";
 import { Line } from "../entities/line";
 import { Text } from "../entities/text";
+import { Dimension } from "../entities/dimension";
 import { evalNumber } from "../input/dynamicInput";
 
 // Characters accepted into the live length/size quick-edit buffer -- plain
 // numbers plus the same basic arithmetic dynamic_input.ts's evalNumber() understands.
 const QUICK_EDIT_CHARS = new Set(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "+", "-", "*", "/", "(", ")"]);
 
-type QuickEditTarget = Line | Text;
+type QuickEditTarget = Line | Text | Dimension;
 
 function isQuickEditable(entity: unknown): entity is QuickEditTarget {
-  return entity instanceof Line || entity instanceof Text;
+  return entity instanceof Line || entity instanceof Text || entity instanceof Dimension;
 }
 
 /** (status-bar label, human hint noun, current value) for `target`'s live property. */
@@ -42,6 +42,7 @@ function info(target: QuickEditTarget): { label: string; hint: string; value: nu
     const dy = target.endPoint.y - target.startPoint.y;
     return { label: "LENGTH", hint: "length", value: Math.hypot(dx, dy) };
   }
+  if (target instanceof Dimension) return { label: "DIM SIZE", hint: "text size", value: target.textHeight };
   return { label: "SIZE", hint: "text size", value: target.height };
 }
 
@@ -130,6 +131,10 @@ export class QuickEditController {
       this.engine.undo.push(this.engine.document.toDict());
       target.startPoint = { x: midX - ux * half, y: midY - uy * half };
       target.endPoint = { x: midX + ux * half, y: midY + uy * half };
+    } else if (target instanceof Dimension) {
+      this.engine.undo.push(this.engine.document.toDict());
+      target.textHeight = value;
+      this.engine.dimScale = target.data.scale as number;
     } else {
       this.engine.undo.push(this.engine.document.toDict());
       target.height = Math.max(value, 0.01);

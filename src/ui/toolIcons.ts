@@ -184,6 +184,14 @@ function drawTrim(ctx: CanvasRenderingContext2D): void {
   line(ctx, 13, 6, 7, 14);
 }
 
+function drawExtend(ctx: CanvasRenderingContext2D): void {
+  // A line running out (dashed, with an arrow) to the edge it stops at.
+  line(ctx, 16, 3, 16, 17);
+  line(ctx, 2, 10, 8, 10);
+  dashed(ctx, () => line(ctx, 8, 10, 15, 10));
+  arrowhead(ctx, 15, 10, 0);
+}
+
 function drawOffset(ctx: CanvasRenderingContext2D): void {
   line(ctx, 2, 17, 15, 3);
   dashed(ctx, () => line(ctx, 5, 19, 18, 6));
@@ -916,6 +924,7 @@ const DRAWERS: Record<string, Drawer> = {
   rotate: drawRotate,
   polararray: drawPolarArray,
   trim: drawTrim,
+  extend: drawExtend,
   offset: drawOffset,
   mirror: drawMirror,
   fillet: drawFillet,

@@ -42,7 +42,8 @@ const DISPLAY_NAMES: Record<string, string> = {
   polararray: "Polar Array",
   scale: "Scale",
   mirror: "Mirror",
-  trim: "Trim",
+  trim: "Trim - click a piece, or drag across several (Shift: extend)",
+  extend: "Extend - run a line or arc out to the next edge (Shift: trim)",
   offset: "Offset",
   fillet: "Fillet",
   chamfer: "Chamfer",
@@ -79,6 +80,7 @@ const COMMAND_GROUPS: readonly (readonly string[])[] = [
     "rotate",
     "polararray",
     "trim",
+    "extend",
     "offset",
     "mirror",
     "fillet",
@@ -92,11 +94,11 @@ const COMMAND_GROUPS: readonly (readonly string[])[] = [
 ];
 
 /** 2D commands offered while editing a 3D part sketch -- geometry that makes
- *  profiles, plus the modify tools and dimensions. Text/library/PDF are
- *  drafting-only. */
+ *  profiles, plus EVERY modify tool and the dimensions. Text, leader and the
+ *  library / PDF tools are drafting-only: they make no profile. */
 const SKETCH_GROUPS: readonly (readonly string[])[] = [
   ["line", "arc", "rectangle", "circle", "ellipse"],
-  ["trim", "offset", "mirror", "fillet", "chamfer", "move", "copy", "rotate", "join", "explode"],
+  ["move", "copy", "rotate", "polararray", "trim", "extend", "offset", "mirror", "fillet", "chamfer", "join", "explode", "scale"],
   ["constrain", "horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident"],
   ["linear", "aligned", "angular", "diameter", "radius"],
 ];
@@ -110,7 +112,7 @@ export type DrawingToolAction = "sheet" | "baseview" | "projview" | "sectionview
 /** Annotation tools offered on a drawing sheet. */
 const DRAWING_GROUPS: readonly (readonly string[])[] = [
   ["linear", "aligned", "angular", "diameter", "radius", "leader", "text"],
-  ["line", "circle", "move", "copy", "trim"],
+  ["line", "circle", "move", "copy", "trim", "extend"],
 ];
 
 /** What the toolbar needs from the workspace controller -- kept as a narrow
@@ -129,7 +131,13 @@ export interface ToolbarWorkspaceHost {
   drawingAction(action: DrawingToolAction): void;
 }
 
+/** Every toolbar button of each command, to show the running one pressed. */
+const COMMAND_BUTTONS = new Map<string, HTMLButtonElement[]>();
+
 export interface ToolbarHandle {
+  /** The command now running (its registry name, any case), or null: its
+   *  button shows pressed. */
+  setActiveCommand(name: string | null): void;
   /** `modelLinked`: the 2D drawing feeds a 3D model, so offer Finish 2D. */
   setWorkspace(workspace: Workspace, sketchLabel?: string, modelLinked?: boolean): void;
 }
@@ -303,7 +311,13 @@ export function buildToolbar(
     fileMenu.setWorkspace(workspace);
   }
   setWorkspace("drafting");
-  return { setWorkspace };
+  function setActiveCommand(name: string | null): void {
+    const running = name?.toLowerCase() ?? "";
+    for (const [command, buttons] of COMMAND_BUTTONS) {
+      for (const b of buttons) b.classList.toggle("active", command === running);
+    }
+  }
+  return { setWorkspace, setActiveCommand };
 }
 
 function addCommandGroups(
@@ -322,6 +336,7 @@ function addCommandGroups(
         getActiveEngine().commandManager.startCommand(name);
         requestRedraw();
       });
+      COMMAND_BUTTONS.set(name, [...(COMMAND_BUTTONS.get(name) ?? []), btn]);
       root.appendChild(btn);
     }
     root.appendChild(gap());

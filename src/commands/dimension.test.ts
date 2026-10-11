@@ -172,3 +172,35 @@ describe("LeaderCommand", () => {
     expect(dims(engine)).toHaveLength(1);
   });
 });
+
+describe("dimensioning a line by clicking it", () => {
+  it("one click on a line takes its two ends; the next click places the dimension", () => {
+    const engine = makeTestEngine();
+    engine.document.addEntity(new Line({ x: 0, y: 0 }, { x: 80, y: 0 }));
+    const cmd = new LinearDimensionCommand(engine);
+    cmd.start();
+    cmd.leftClick({ x: 30, y: 0 }); // on the line, away from its ends and middle
+    cmd.leftClick({ x: 40, y: -20 });
+    const [dim] = dims(engine);
+    expect(dim!.dimType).toBe("linear");
+    expect([dim!.data.p1, dim!.data.p2]).toEqual([{ x: 0, y: 0 }, { x: 80, y: 0 }]);
+  });
+
+  it("a click on an end of the line is still a point pick (aligned too)", () => {
+    const engine = makeTestEngine();
+    engine.document.addEntity(new Line({ x: 0, y: 0 }, { x: 80, y: 60 }));
+    const cmd = new AlignedDimensionCommand(engine);
+    cmd.start();
+    cmd.leftClick({ x: 0, y: 0 }); // its end: the first point, not the whole line
+    expect(dims(engine)).toHaveLength(0);
+    cmd.leftClick({ x: 40, y: 30 });
+    cmd.leftClick({ x: 30, y: 50 });
+    expect(dims(engine)).toHaveLength(1);
+
+    const whole = new AlignedDimensionCommand(engine);
+    whole.start();
+    whole.leftClick({ x: 20, y: 15 }); // on the line itself
+    whole.leftClick({ x: 30, y: 50 });
+    expect(dims(engine)[1]!.data.p2).toEqual({ x: 80, y: 60 });
+  });
+});

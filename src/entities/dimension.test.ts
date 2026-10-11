@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Polyline } from "./polyline";
 import { Dimension } from "./dimension";
 import { Viewport } from "../engine/viewport";
 
@@ -18,6 +19,8 @@ function fakeCtx(): CanvasRenderingContext2D {
     arc: noop,
     fillText: noop,
     setLineDash: noop,
+    closePath: noop,
+    fill: noop,
   } as unknown as CanvasRenderingContext2D;
 }
 
@@ -292,5 +295,19 @@ describe("Dimension: decimals, small dimensions, movable text", () => {
     expect(grip.y).toBeCloseTo(22, 9);
     // The dimension line runs out to the text.
     expect(dim.getBounds()[2]).toBeGreaterThan(40);
+  });
+});
+
+describe("Dimension: exploded for export", () => {
+  it("each arrowhead is one closed triangle, and a leader is one line and its text", () => {
+    const linear = new Dimension("linear", { p1: { x: 0, y: 0 }, p2: { x: 100, y: 0 }, text_position: { x: 50, y: -20 } });
+    const parts = linear.explode();
+    const arrows = parts.filter((e): e is Polyline => e instanceof Polyline);
+    expect(arrows).toHaveLength(2);
+    expect(arrows.every((a) => a.closed && a.vertices.length === 3)).toBe(true);
+    expect(arrows.map((a) => a.vertices[0]!.point.x).sort((a, b) => a - b)).toEqual([0, 100]); // their points on the two ends
+
+    const leader = new Dimension("leader", { point: { x: 0, y: 0 }, text_position: { x: 30, y: -20 }, text: "NOTE" });
+    expect(leader.explode().map((e) => e.constructor.name)).toEqual(["Line", "Text"]);
   });
 });

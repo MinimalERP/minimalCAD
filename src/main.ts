@@ -17,7 +17,7 @@ import { OVERLAY_LABEL, cycleOverlayMode, overlayMode } from "./ui/overlayMode";
 import "./style.css";
 import { CanvasView } from "./ui/canvasView";
 import { CommandBar } from "./ui/commandBar";
-import { buildToolbar } from "./ui/toolbar";
+import { buildToolbar, type ToolbarHandle } from "./ui/toolbar";
 import { buildTabBar } from "./ui/tabBar";
 import type { TabBarHost, TabBar } from "./ui/tabBar";
 import { buildMobileNumpad } from "./ui/mobileNumpad";
@@ -66,8 +66,12 @@ function requestRedraw(): void {
 // canvasView.ts's aim/confirm doc comment) stayed on screen after that
 // command ended and got wrongly confirmed as the first point of whatever
 // command ran next.
+let toolbarHandle: ToolbarHandle | null = null;
 function onCommandChanged(): void {
   view.discardInFlightTouchPointPick();
+  // the running tool's button shows pressed
+  const name = getActiveEngine().commandManager.currentName;
+  toolbarHandle?.setActiveCommand(name === "READY" ? null : name);
 }
 
 // --- Tab sessions: one TabSession (engine/session.ts) per open drawing.
@@ -194,7 +198,8 @@ showOverlayMode();
 // against it. The ResizeObserver in canvasView.ts's constructor is the
 // actual belt-and-braces fix for any *later* layout-driven size change;
 // this ordering just makes sure the very first sizing is already correct.
-workspace.attachToolbar(buildToolbar(toolbarEl, commandBarEl, getActiveEngine, () => view.requestRedraw(), workspace));
+toolbarHandle = buildToolbar(toolbarEl, commandBarEl, getActiveEngine, () => view.requestRedraw(), workspace);
+workspace.attachToolbar(toolbarHandle);
 
 view = new CanvasView(canvasEl, firstSession.viewport, firstSession.engine);
 

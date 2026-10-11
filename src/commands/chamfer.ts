@@ -16,6 +16,9 @@
 import type { Point } from "../core/types";
 import type { Engine } from "../engine/engine";
 import { BaseCommand } from "./base";
+import type { Entity } from "../entities/entity";
+import { Polyline } from "../entities/polyline";
+import { PolylineCorners } from "./polylineCorners";
 import { Line } from "../entities/line";
 import { entityAt } from "../engine/picking";
 import { clickDirectionVector, infiniteLineIntersection, keptEndpoint } from "../geometry/pickSide";
@@ -29,11 +32,17 @@ export class ChamferCommand extends BaseCommand {
   private click2: Point | null = null;
   private distance = 10.0;
 
+  /** A rectangle (any polyline) clicked is opened into its sides for the
+   *  command and joined back into one outline when it ends. */
+  private corners: PolylineCorners;
+
   constructor(engine: Engine) {
     super(engine);
+    this.corners = new PolylineCorners(engine);
   }
 
   start(): void {
+    this.corners.close();
     this.state = 0;
     this.entity1 = null;
     this.entity2 = null;
@@ -44,7 +53,12 @@ export class ChamferCommand extends BaseCommand {
     this.engine.requestRedraw();
   }
 
+  pick(): (entity: Entity) => boolean {
+    return (e) => e !== this.entity1 && (e instanceof Line || e instanceof Polyline);
+  }
+
   leftClick(worldPos: Point): void {
+    this.corners.openAt(worldPos);
     const candidates = this.document.getEntities().filter((e): e is Line => e instanceof Line);
     if (this.state === 0) {
       const hit = entityAt(candidates, worldPos, this.engine.pickTolerance());
@@ -107,7 +121,7 @@ export class ChamferCommand extends BaseCommand {
     const t1: Point = { x: intersection.x + u1.x * this.distance, y: intersection.y + u1.y * this.distance };
     const t2: Point = { x: intersection.x + u2.x * this.distance, y: intersection.y + u2.y * this.distance };
 
-    this.undo.push(this.document.toDict());
+    this.undo.push(this.corners.undoState());
     this.document.removeEntity(l1);
     this.document.removeEntity(l2);
     this.document.addEntity(new Line(t1, kept1, { lineType: l1.lineType }));
@@ -126,6 +140,7 @@ export class ChamferCommand extends BaseCommand {
   }
 
   cancel(): void {
+    this.corners.close();
     this.state = 0;
     this.entity1 = null;
     this.entity2 = null;

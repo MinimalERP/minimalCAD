@@ -8,6 +8,7 @@
  */
 
 import type { Point } from "../core/types";
+import type { Entity } from "../entities/entity";
 import type { Command } from "./types";
 import type { Engine } from "../engine/engine";
 import { COMMAND_REGISTRY, NON_REPEATABLE } from "./registry";
@@ -103,6 +104,15 @@ export class CommandManager {
 
   leftClick(pt: Point): void {
     this.currentCommand?.leftClick(pt);
+  }
+
+  leftRelease(): void {
+    this.currentCommand?.leftRelease?.();
+  }
+
+  /** Which entities the running command would pick right now, or null. */
+  pick(): ((entity: Entity) => boolean) | null {
+    return this.currentCommand?.pick?.() ?? null;
   }
 
   rightClick(pt: Point): void {

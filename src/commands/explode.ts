@@ -46,6 +46,10 @@ export class ExplodeCommand extends BaseCommand {
     this.commandBar.enableInput();
   }
 
+  pick(): (entity: Entity) => boolean {
+    return isExplodable;
+  }
+
   leftClick(worldPos: Point): void {
     for (const entity of this.document.getEntities()) {
       if (isExplodable(entity) && entity.hitTest(worldPos, this.engine.pickTolerance())) {

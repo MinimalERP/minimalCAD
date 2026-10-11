@@ -20,6 +20,17 @@ export interface Command {
   draw(ctx: CanvasRenderingContext2D): void;
   cancel(): void;
   textInput?(text: string): void;
+  /** Esc on this command leaves the selection as it is (COPY: the objects
+   *  copied stay selected). */
+  keepsSelection?: boolean;
+  /** The left button was let go (after leftClick): a command that works by
+   *  dragging -- TRIM across several entities -- ends its stroke here. */
+  leftRelease?(): void;
+  /** When the command is waiting for an ENTITY to be picked (not a point):
+   *  says which entities it would take. The canvas then shows a pick box for
+   *  a cursor and lights up the entity under it. Null / absent while it is
+   *  waiting for a point. */
+  pick?(): ((entity: Entity) => boolean) | null;
 }
 
 /** Contextual grip-drag commands (move/extend/resize grips) aren't typeable

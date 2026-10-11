@@ -4,11 +4,15 @@
  *
  * Ported from commands/copy.py: same skeleton as Move, plus a 4th state for
  * array-copy count -- only reachable via a TYPED displacement, not a mouse
- * click (a mouse click always commits exactly one copy immediately).
+ * click.
+ *
+ * MULTIPLE by default: once the reference point is picked, every click
+ * places another copy of the same objects from that same reference point,
+ * until Esc. The objects stay selected throughout (and afterwards). Each
+ * placement is its own undo step.
  */
 
 import type { Point } from "../core/types";
-import type { Entity } from "../entities/entity";
 import type { Engine } from "../engine/engine";
 import { PickTransformCommand } from "./transformBase";
 import { parsePoint } from "../input/dynamicInput";
@@ -19,12 +23,15 @@ export class CopyCommand extends PickTransformCommand {
   private currentMousePos: Point | null = null;
   private pendingDx = 0;
   private pendingDy = 0;
+  /** How many copies this run has placed so far. */
+  private placed = 0;
 
   constructor(engine: Engine) {
     super(engine);
   }
 
   start(): void {
+    this.placed = 0;
     this.commandBar.disableDualInput();
     const preSelected = this.preSelected();
     if (preSelected.length > 0) {
@@ -54,6 +61,8 @@ export class CopyCommand extends PickTransformCommand {
       const pick = this.pickTargetAt(worldPos);
       if (pick === null) return;
       this.targetEntities = [pick];
+      this.engine.selection.clear();
+      this.engine.selection.select(pick);
       this.state = 1;
       this.commandBar.setStatus("COPY", "1 selected - Pick Reference Point");
     } else if (this.state === 1) {
@@ -66,7 +75,7 @@ export class CopyCommand extends PickTransformCommand {
       const { point, snapType } = this.engine.snap(worldPos, this.referencePoint);
       const resolved =
         snapType === null ? this.engine.applyOrtho(this.referencePoint!, point) : point;
-      // Mouse click always commits exactly one copy immediately.
+      // Each click places one copy; the command stays ready for the next.
       this.executeCopy(resolved.x - this.referencePoint!.x, resolved.y - this.referencePoint!.y, 1);
     } else {
       // state 3: a plain click while awaiting a count confirms count=1.
@@ -109,10 +118,7 @@ export class CopyCommand extends PickTransformCommand {
       }
       const dx = point.x - this.referencePoint.x;
       const dy = point.y - this.referencePoint.y;
-      if (dx === 0 && dy === 0) {
-        this.start();
-        return;
-      }
+      if (dx === 0 && dy === 0) return;
       this.pendingDx = dx;
       this.pendingDy = dy;
       this.state = 3;
@@ -138,19 +144,22 @@ export class CopyCommand extends PickTransformCommand {
   }
 
   private executeCopy(dx: number, dy: number, count: number): void {
-    if (dx === 0 && dy === 0) {
-      this.start();
-      return;
-    }
-    this.commitNew((entity: Entity) => {
-      const copies: Entity[] = [];
-      for (let k = 1; k <= count; k++) {
-        const c = entity.copy();
-        c.move(dx * k, dy * k);
-        copies.push(c);
+    if (dx !== 0 || dy !== 0) {
+      this.undo.push(this.document.toDict());
+      for (const entity of this.targetEntities) {
+        for (let k = 1; k <= count; k++) {
+          const c = entity.copy();
+          c.move(dx * k, dy * k);
+          this.document.addEntity(c);
+        }
       }
-      return copies;
-    });
+      this.placed += count;
+    }
+    // back to placing, from the same reference point, with the same objects
+    this.state = 2;
+    this.commandBar.enableDualInput("0.00", "0.0");
+    this.commandBar.setStatus("COPY", `${this.placed} placed - click the next position (Esc to finish)`);
+    this.engine.requestRedraw();
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
@@ -178,6 +187,9 @@ export class CopyCommand extends PickTransformCommand {
       }
     }
   }
+
+  /** Esc ends the run of copies; what was being copied stays selected. */
+  keepsSelection = true;
 
   cancel(): void {
     this.state = 0;

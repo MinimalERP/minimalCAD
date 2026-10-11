@@ -86,7 +86,7 @@ export class LeaderCommand extends BaseCommand {
       if (!clean) return; // ignore empty strings, keep focus for another attempt
 
       this.undo.push(this.document.toDict());
-      const leader = new Dimension("leader", { point: this.point!, text_position: this.currentMousePos!, text: clean });
+      const leader = new Dimension("leader", this.engine.styleDimension({ point: this.point!, text_position: this.currentMousePos!, text: clean }));
       this.document.addEntity(leader);
 
       this.start();
@@ -111,7 +111,7 @@ export class LeaderCommand extends BaseCommand {
     } else {
       return;
     }
-    const preview = new Dimension("leader", { point: this.point, text_position: this.currentMousePos, text: previewStr });
+    const preview = new Dimension("leader", this.engine.styleDimension({ point: this.point, text_position: this.currentMousePos, text: previewStr }));
     preview.draw(ctx, this.engine.viewport, true);
   }
 

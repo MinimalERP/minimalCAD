@@ -37,6 +37,12 @@ export abstract class PickTransformCommand extends BaseCommand {
     return this.eligibleTypes.some((ctor) => entity instanceof ctor);
   }
 
+  /** Still choosing what to work on (nothing picked yet): the canvas shows
+   *  a pick box and lights up the entity under it. */
+  pick(): ((entity: Entity) => boolean) | null {
+    return this.targetEntities.length === 0 ? (e) => this.isEligible(e) : null;
+  }
+
   protected preSelected(): Entity[] {
     return this.engine.selection.getEntities().filter((e) => this.isEligible(e));
   }

@@ -22,6 +22,7 @@ import type { Point } from "../core/types";
 import { pointDistance } from "../core/types";
 import type { Engine } from "../engine/engine";
 import { BaseCommand } from "./base";
+import type { Entity } from "../entities/entity";
 import { Circle } from "../entities/circle";
 import { Arc } from "../entities/arc";
 import { Dimension, type DimData, type DimType } from "../entities/dimension";
@@ -55,6 +56,10 @@ abstract class RadialDimensionCommandBase extends BaseCommand {
     this.targetCurve = null;
     this.currentMousePos = null;
     this.commandBar.setStatus(this.statusLabel(), "Select Circle or Arc");
+  }
+
+  pick(): ((entity: Entity) => boolean) | null {
+    return this.state === 0 ? (e) => e instanceof Circle || e instanceof Arc : null;
   }
 
   leftClick(worldPos: Point): void {

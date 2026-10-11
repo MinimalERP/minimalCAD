@@ -59,6 +59,20 @@ const COLOR_CONSTRAINT = "#c586c0";
 const COLOR_CONSTRAINT_ACTIVE = "#ff69ff";
 const COLOR_SIZE_LABEL = "#7fd0e8";
 /** The tag drawn by an entity for each geometric constraint on it. */
+/** A 12 px square (twice the 6 px pick tolerance), white on a dark edge so it
+ *  shows on any background; its hot spot is its centre. */
+const PICK_BOX_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='17' height='17'><rect x='2.5' y='2.5' width='12' height='12' fill='none' stroke='black' stroke-width='3'/><rect x='2.5' y='2.5' width='12' height='12' fill='none' stroke='white' stroke-width='1'/></svg>",
+)}") 8 8, crosshair`;
+
+/** No command running: the crosshair with the pick box at its centre. */
+const IDLE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='49' height='49'>" +
+    "<g fill='none' stroke='black' stroke-width='3'><path d='M24.5 2V18.5M24.5 30.5V47M2 24.5H18.5M30.5 24.5H47'/><rect x='18.5' y='18.5' width='12' height='12'/></g>" +
+    "<g fill='none' stroke='white' stroke-width='1'><path d='M24.5 2V18.5M24.5 30.5V47M2 24.5H18.5M30.5 24.5H47'/><rect x='18.5' y='18.5' width='12' height='12'/></g>" +
+    "</svg>",
+)}") 24 24, crosshair`;
+
 const CONSTRAINT_GLYPH: Record<Exclude<import("../core/constraints").ConstraintKind, "distance">, string> = {
   horizontal: "H",
   vertical: "V",
@@ -330,6 +344,16 @@ export class CanvasView {
     }
 
     if (e.button === 1) {
+      // Two quick presses of the wheel: zoom to fit everything.
+      const now = performance.now();
+      if (now - this.lastWheelPress < 350) {
+        this.lastWheelPress = 0;
+        this.engine.zoomExtents();
+        this.requestRedraw();
+        e.preventDefault();
+        return;
+      }
+      this.lastWheelPress = now;
       this.isPanning = true;
       this.lastPanScreenPos = this.eventToScreenPoint(e);
       this.canvas.style.cursor = "grabbing";
@@ -350,6 +374,7 @@ export class CanvasView {
     }
 
     const worldPos = this.viewport.screenToWorld(this.eventToScreenPoint(e));
+    this.engine.shiftHeld = e.shiftKey;
     this.runPointerDown(worldPos, e.button, e.shiftKey);
   }
 
@@ -373,6 +398,7 @@ export class CanvasView {
     // fixed`, so it needs the same coordinate space getBoundingClientRect()
     // itself is measured in.
     this.engine.commandBar.setTooltipPosition({ x: e.clientX, y: e.clientY });
+    this.engine.shiftHeld = e.shiftKey;
     this.runPointerMove(this.viewport.screenToWorld(this.eventToScreenPoint(e)));
   }
 
@@ -511,7 +537,13 @@ export class CanvasView {
       return;
     }
 
-    if (button !== 0) return; // no command active: only the primary button/touch drives selection/grips
+    // No command running: a right-click runs the last command again (as Enter does).
+    if (button === 2) {
+      this.engine.commandManager.repeatLast();
+      this.requestRedraw();
+      return;
+    }
+    if (button !== 0) return; // only the primary button/touch drives selection/grips
     // A click on a value label edits it right there -- and must not
     // deselect or hide the very number being clicked.
     const sp = this.viewport.worldToScreen(worldPos);
@@ -536,13 +568,12 @@ export class CanvasView {
     const gripHit = gripAt(this.engine.selection, worldPos, tolerance);
     const hit = entityAt(this.engine.document.getEntities(), worldPos, tolerance);
 
-    // A grip only wins when it belongs to the entity the click actually lands
-    // on (or nothing else is there) -- e.g. the shared corner of two
-    // connected lines, where the OTHER line's endpoint grip sits at the
-    // exact same point as the selected line's own grip. Without this, that
-    // click always re-grabs the already-selected line's grip and clicking
-    // the neighboring line to select it becomes impossible from there.
-    if (gripHit !== null && (hit === null || hit === gripHit.entity)) {
+    // A grip of the selected entity always wins, whatever else lies under
+    // it -- at the shared corner of two connected lines the click is on the
+    // selected line's own end, so it stretches THAT line. (It used to go to
+    // whichever line came first in the drawing: the neighbour got selected
+    // and dragged instead.) The neighbour is picked anywhere else along it.
+    if (gripHit !== null) {
       this.engine.activeConstraintId = null;
       const commandName = GRIP_COMMAND_NAMES[gripHit.kind];
       this.engine.commandManager.startCommand(commandName);
@@ -598,6 +629,7 @@ export class CanvasView {
   }
 
   private runPointerMove(worldPos: Point): void {
+    this.hoverWorld = worldPos;
     if (this.dragEntities !== null && this.dragLastPos !== null) {
       const delta = { x: worldPos.x - this.dragLastPos.x, y: worldPos.y - this.dragLastPos.y };
       if (!this.dragMoved) {
@@ -626,6 +658,7 @@ export class CanvasView {
   }
 
   private runPointerUp(): void {
+    this.engine.commandManager.leftRelease();
     if (this.dragEntities !== null) {
       this.dragEntities = null;
       this.dragLastPos = null;
@@ -921,9 +954,10 @@ export class CanvasView {
     // F8 (Ortho) is handled window-wide in main.ts: it has to work while the
     // command bar's distance / angle field holds focus, not just the canvas.
     if (e.key === "Escape") {
+      const keepSelection = this.engine.commandManager.currentCommand?.keepsSelection === true;
       this.engine.cancelCommand(); // also clears snap feedback -- see engine/engine.ts
       this.commandBuffer = "";
-      this.engine.selection.clear();
+      if (!keepSelection) this.engine.selection.clear();
       this.selectOrigin = null;
       this.selectCurrent = null;
       this.selectActive = false;
@@ -1103,6 +1137,7 @@ export class CanvasView {
     this.drawConstraints();
     this.drawValueLabels();
     this.drawSelectionHighlights();
+    this.drawPickFeedback();
     this.drawSelectionBox();
     this.engine.commandManager.draw(this.ctx);
     this.drawSnapMarker();
@@ -1496,6 +1531,35 @@ export class CanvasView {
     for (const entity of this.engine.selection.getEntities()) {
       entity.drawSelected(this.ctx, this.viewport);
     }
+  }
+
+  /** When the wheel was last pressed, to tell a double press (zoom to fit). */
+  private lastWheelPress = 0;
+
+  /** Where the mouse last was (world), for the pick box's hover highlight. */
+  private hoverWorld: Point | null = null;
+  private cursorNow = "";
+
+  /**
+   * While a command is waiting for an ENTITY (trim, fillet, a dimension's
+   * circle...) the cursor is a pick box the size of the pick tolerance --
+   * what is inside the box is what a click takes -- and the entity under it
+   * is lit, so there is no guessing which line a click will land on. While a
+   * command wants a POINT it is the plain crosshair, and with no command
+   * running it is both at once -- a crosshair with the pick box at its
+   * centre -- since a click then selects whatever is in the box.
+   */
+  private drawPickFeedback(): void {
+    const wanted = this.engine.commandManager.pick();
+    const idle = this.engine.commandManager.currentCommand === null;
+    const cursor = this.isPanning ? "grabbing" : wanted !== null ? PICK_BOX_CURSOR : idle ? IDLE_CURSOR : "crosshair";
+    if (cursor !== this.cursorNow) {
+      this.cursorNow = cursor;
+      this.canvas.style.cursor = cursor;
+    }
+    if (wanted === null || this.hoverWorld === null) return;
+    const hit = entityAt(this.engine.document.getEntities().filter(wanted), this.hoverWorld, this.engine.pickTolerance());
+    if (hit !== null) hit.drawSelected(this.ctx, this.viewport);
   }
 
   private drawSelectionBox(): void {

@@ -9,6 +9,7 @@
 import type { Point } from "../core/types";
 import type { Engine } from "../engine/engine";
 import { BaseCommand } from "./base";
+import type { Entity } from "../entities/entity";
 import { Line } from "../entities/line";
 import { Dimension, type DimData } from "../entities/dimension";
 
@@ -36,6 +37,10 @@ export class AngularDimensionCommand extends BaseCommand {
     this.line2 = null;
     this.currentMousePos = null;
     this.commandBar.setStatus("DIMANGULAR", "Select first line");
+  }
+
+  pick(): ((entity: Entity) => boolean) | null {
+    return this.state < 2 ? (e) => e instanceof Line && e !== this.line1 : null;
   }
 
   leftClick(worldPos: Point): void {

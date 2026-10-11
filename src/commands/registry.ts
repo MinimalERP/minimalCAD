@@ -19,7 +19,7 @@ import { RotateCommand } from "./rotate";
 import { ScaleCommand } from "./scale";
 import { MirrorCommand } from "./mirror";
 import { PolarArrayCommand } from "./polarArray";
-import { TrimCommand } from "./trim";
+import { ExtendCommand, TrimCommand } from "./trim";
 import { OffsetCommand } from "./offset";
 import { FilletCommand } from "./fillet";
 import { ChamferCommand } from "./chamfer";
@@ -61,6 +61,7 @@ export const COMMAND_REGISTRY: Record<string, RegistryEntry> = {
   mirror: { factory: (engine) => new MirrorCommand(engine), aliases: ["mi"] },
   polararray: { factory: (engine) => new PolarArrayCommand(engine), aliases: ["pa"] },
   trim: { factory: (engine) => new TrimCommand(engine), aliases: ["t"] },
+  extend: { factory: (engine) => new ExtendCommand(engine), aliases: ["et", "ext"] },
   offset: { factory: (engine) => new OffsetCommand(engine), aliases: ["o"] },
   fillet: { factory: (engine) => new FilletCommand(engine), aliases: ["f"] },
   chamfer: { factory: (engine) => new ChamferCommand(engine), aliases: ["cha"] },

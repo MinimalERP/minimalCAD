@@ -39,7 +39,7 @@ describe("ExplodeCommand", () => {
     engine.document.addEntity(dim);
     // Dimension only populates its hit-test cache after a draw() -- same
     // prerequisite entities/dimension.test.ts documents.
-    dim.draw({ save: () => {}, restore: () => {}, beginPath: () => {}, moveTo: () => {}, lineTo: () => {}, stroke: () => {}, arc: () => {}, fillText: () => {}, setLineDash: () => {} } as unknown as CanvasRenderingContext2D, engine.viewport);
+    dim.draw({ save: () => {}, restore: () => {}, beginPath: () => {}, moveTo: () => {}, lineTo: () => {}, stroke: () => {}, closePath: () => {}, fill: () => {}, arc: () => {}, fillText: () => {}, setLineDash: () => {} } as unknown as CanvasRenderingContext2D, engine.viewport);
 
     const cmd = new ExplodeCommand(engine);
     cmd.start();
