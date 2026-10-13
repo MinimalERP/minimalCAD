@@ -51,7 +51,7 @@ export class RectangleCommand extends BaseCommand {
       this.commandBar.setStatus("RECTANGLE", "Width: 0.00 | Height: 0.00 (or type w,h)");
       this.commandBar.enableInput();
     } else {
-      const { point } = this.engine.snap(worldPos, this.firstCorner);
+      const { point } = this.engine.snap(worldPos);
       this.commitSecondPoint(point);
     }
     this.engine.requestRedraw();
@@ -90,8 +90,9 @@ export class RectangleCommand extends BaseCommand {
   }
 
   mouseMove(worldPos: Point): void {
-    const reference = this.state === 1 ? this.firstCorner : null;
-    const { point } = this.engine.snap(worldPos, reference);
+    // No reference point: no line runs from the first corner to this one,
+    // so Perpendicular / Tangent from it mean nothing here.
+    const { point } = this.engine.snap(worldPos);
     this.currentMousePos = point;
 
     if (this.state === 1 && this.firstCorner !== null) {

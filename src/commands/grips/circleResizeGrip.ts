@@ -36,14 +36,14 @@ export class CircleResizeGripCommand extends BaseCommand {
 
   leftClick(worldPos: Point): void {
     if (this.entity === null) return;
-    const { point } = this.engine.snap(worldPos, this.entity.center);
-    const radius = Math.hypot(point.x - this.entity.center.x, point.y - this.entity.center.y);
+    const { point } = this.engine.snap(worldPos, this.entity.center, this.entity);
+    const radius =Math.hypot(point.x - this.entity.center.x, point.y - this.entity.center.y);
     this.execute(radius);
   }
 
   mouseMove(worldPos: Point): void {
     if (this.entity === null) return;
-    const { point } = this.engine.snap(worldPos, this.entity.center);
+    const { point } = this.engine.snap(worldPos, this.entity.center, this.entity);
     this.currentRadius = Math.hypot(point.x - this.entity.center.x, point.y - this.entity.center.y);
     this.commandBar.setLiveValue(this.currentRadius.toFixed(2));
     this.engine.requestRedraw();

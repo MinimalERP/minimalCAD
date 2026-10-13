@@ -5,7 +5,8 @@
  * Ported from graphics/snap.py -- full priority-ordered osnap search:
  * Endpoint, Intersection, Midpoint, Center, Quadrant, Perpendicular (needs a
  * reference point), Tangent (needs a reference point), Center-via-curve-
- * hover fallback, Nearest.
+ * hover fallback, Nearest. Within one kind, the point closest to the cursor
+ * wins.
  */
 
 import { boundsOverlap, type Point } from "../core/types";
@@ -32,7 +33,7 @@ export interface SnapMatch {
   snapType: SnapType;
 }
 
-type CircleLike = Circle | Arc;
+const TWO_PI = 2.0 * Math.PI;
 
 function dist(a: Point, b: Point): number {
   const dx = a.x - b.x;
@@ -60,109 +61,102 @@ function expandPolylines(entities: Entity[]): Entity[] {
   return expanded;
 }
 
+/** The candidate closest to the cursor, if any lies within `tolerance` --
+ *  never just the first one found, so where two snap points of one kind
+ *  are both in reach the marker goes to the one being pointed at. */
+function closestOf(worldPos: Point, points: Point[], tolerance: number): Point | null {
+  let best: Point | null = null;
+  let bestDist = Infinity;
+  for (const pt of points) {
+    const d = dist(worldPos, pt);
+    if (d <= tolerance && d < bestDist) {
+      best = pt;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+/** Is `pt` (a point of the full ellipse) on the part that is drawn? */
+function onEllipseSweep(ellipse: Ellipse, pt: Point, tolerance: number): boolean {
+  return ellipse.isFull() || ellipse.hitTest(pt, tolerance);
+}
+
 function findEndpoint(worldPos: Point, entities: Entity[], tolerance: number): Point | null {
+  const points: Point[] = [];
   for (const entity of entities) {
     if (entity instanceof Line) {
-      for (const pt of [entity.startPoint, entity.endPoint]) {
-        if (dist(worldPos, pt) <= tolerance) return { ...pt };
-      }
+      points.push({ ...entity.startPoint }, { ...entity.endPoint });
     } else if (entity instanceof Arc) {
-      for (const pt of [entity.pointAt(entity.startAngle), entity.pointAt(entity.endAngle)]) {
-        if (dist(worldPos, pt) <= tolerance) return pt;
-      }
+      points.push(entity.pointAt(entity.startAngle), entity.pointAt(entity.endAngle));
     } else if (entity instanceof Ellipse && !entity.isFull()) {
       // A full ellipse (unlike Arc, which has no "full" representation of
       // its own -- see trim.ts) has no real endpoints to snap to; skip it,
       // same as Circle never reaching this function's Line/Arc-only branches.
-      for (const pt of [entity.pointAt(entity.startAngle), entity.pointAt(entity.endAngle)]) {
-        if (dist(worldPos, pt) <= tolerance) return pt;
-      }
+      points.push(entity.pointAt(entity.startAngle), entity.pointAt(entity.endAngle));
     }
   }
-  return null;
+  return closestOf(worldPos, points, tolerance);
 }
 
-/** Line-Line, Line-Circle/Arc, and Circle/Arc-Circle/Arc intersections,
- *  reusing geometry/intersect.ts's own (gap=0, i.e. genuinely bounded/
- *  touching, no near-miss widening) intersection math -- the same
- *  correctness Trim already relies on. */
+/** Every crossing of two lines / circles / arcs / ellipses, reusing
+ *  geometry/intersect.ts's own (gap=0, i.e. genuinely bounded/touching, no
+ *  near-miss widening) intersection math -- the same correctness Trim
+ *  already relies on. */
 function findIntersection(worldPos: Point, entities: Entity[], tolerance: number): Point | null {
-  const lines = entities.filter((e): e is Line => e instanceof Line);
-  const radials = entities.filter((e): e is CircleLike => e instanceof Circle || e instanceof Arc);
-  const lineBounds = lines.map((l) => l.getBounds());
-  const radialBounds = radials.map((r) => r.getBounds());
-
-  for (let i = 0; i < lines.length; i++) {
-    const b1 = lineBounds[i]!;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (!boundsOverlap(b1, lineBounds[j]!, tolerance)) continue;
-      for (const pt of findIntersections(lines[i]!, lines[j]!, 0)) {
-        if (dist(worldPos, pt) <= tolerance) return pt;
-      }
+  const curves = entities.filter(
+    (e) => e instanceof Line || e instanceof Circle || e instanceof Arc || e instanceof Ellipse,
+  );
+  const bounds = curves.map((c) => c.getBounds());
+  const points: Point[] = [];
+  for (let i = 0; i < curves.length; i++) {
+    for (let j = i + 1; j < curves.length; j++) {
+      if (!boundsOverlap(bounds[i]!, bounds[j]!, tolerance)) continue;
+      points.push(...findIntersections(curves[i]!, curves[j]!, 0));
     }
   }
-  for (let i = 0; i < lines.length; i++) {
-    const bl = lineBounds[i]!;
-    for (let j = 0; j < radials.length; j++) {
-      if (!boundsOverlap(bl, radialBounds[j]!, tolerance)) continue;
-      for (const pt of findIntersections(lines[i]!, radials[j]!, 0)) {
-        if (dist(worldPos, pt) <= tolerance) return pt;
-      }
-    }
-  }
-  for (let i = 0; i < radials.length; i++) {
-    const b1 = radialBounds[i]!;
-    for (let j = i + 1; j < radials.length; j++) {
-      if (!boundsOverlap(b1, radialBounds[j]!, tolerance)) continue;
-      for (const pt of findIntersections(radials[i]!, radials[j]!, 0)) {
-        if (dist(worldPos, pt) <= tolerance) return pt;
-      }
-    }
-  }
-  return null;
+  return closestOf(worldPos, points, tolerance);
 }
 
 function findMidpoint(worldPos: Point, entities: Entity[], tolerance: number): Point | null {
+  const points: Point[] = [];
   for (const entity of entities) {
     if (entity instanceof Line) {
-      const mid = entity.midpoint();
-      if (dist(worldPos, mid) <= tolerance) return mid;
+      points.push(entity.midpoint());
+    } else if (entity instanceof Arc) {
+      const sweep = (((entity.endAngle - entity.startAngle) % TWO_PI) + TWO_PI) % TWO_PI;
+      if (sweep > 0) points.push(entity.pointAt(entity.startAngle + sweep / 2));
     }
   }
-  return null;
+  return closestOf(worldPos, points, tolerance);
 }
 
 function findCenter(worldPos: Point, entities: Entity[], tolerance: number): Point | null {
+  const points: Point[] = [];
   for (const entity of entities) {
-    if (entity instanceof Circle || entity instanceof Arc) {
-      if (dist(worldPos, entity.center) <= tolerance) return { ...entity.center };
+    if (entity instanceof Circle || entity instanceof Arc || entity instanceof Ellipse) {
+      points.push({ ...entity.center });
     }
   }
-  return null;
+  return closestOf(worldPos, points, tolerance);
 }
 
 function findQuadrant(worldPos: Point, entities: Entity[], tolerance: number): Point | null {
+  const points: Point[] = [];
   for (const entity of entities) {
     if (entity instanceof Circle) {
-      for (const q of entity.quadrantPoints()) {
-        if (dist(worldPos, q) <= tolerance) return q;
-      }
+      points.push(...entity.quadrantPoints());
     } else if (entity instanceof Arc) {
-      const c = entity.center;
-      const r = entity.radius;
-      const quadrants: [Point, number][] = [
-        [{ x: c.x + r, y: c.y }, 0],
-        [{ x: c.x, y: c.y - r }, -Math.PI / 2],
-        [{ x: c.x - r, y: c.y }, Math.PI],
-        [{ x: c.x, y: c.y + r }, Math.PI / 2],
-      ];
-      for (const [pt, angle] of quadrants) {
-        if (!entity.angleInSweep(angle)) continue;
-        if (dist(worldPos, pt) <= tolerance) return pt;
+      for (const angle of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+        if (entity.angleInSweep(angle)) points.push(entity.pointAt(angle));
+      }
+    } else if (entity instanceof Ellipse) {
+      for (const pt of entity.axisPoints()) {
+        if (onEllipseSweep(entity, pt, tolerance)) points.push(pt);
       }
     }
   }
-  return null;
+  return closestOf(worldPos, points, tolerance);
 }
 
 function perpendicularFoot(ref: Point, p1: Point, p2: Point): Point | null {
@@ -176,7 +170,13 @@ function perpendicularFoot(ref: Point, p1: Point, p2: Point): Point | null {
 
 /** Point on an entity such that the segment from referencePoint to it is
  *  perpendicular to the entity -- foot of perpendicular on a line, or the
- *  radius-aligned point on a circle/arc. */
+ *  two radius-aligned points (near side and far side) on a circle/arc.
+ *
+ *  `referencePoint` must be a point that stays put while the cursor moves
+ *  (a line's start, the fixed end of a line being stretched). A foot that
+ *  falls on the reference point itself -- the reference lies on that very
+ *  entity -- is no perpendicular at all (a zero-length segment) and is
+ *  left out. */
 function findPerpendicular(
   worldPos: Point,
   entities: Entity[],
@@ -184,22 +184,27 @@ function findPerpendicular(
   referencePoint: Point | null,
 ): Point | null {
   if (referencePoint === null) return null;
+  const degenerate = tolerance * 1e-3;
+  const points: Point[] = [];
   for (const entity of entities) {
     if (entity instanceof Line) {
       const foot = perpendicularFoot(referencePoint, entity.startPoint, entity.endPoint);
-      if (foot !== null && dist(worldPos, foot) <= tolerance) return foot;
+      if (foot !== null) points.push(foot);
     } else if (entity instanceof Circle || entity instanceof Arc) {
       const c = entity.center;
-      const v = { x: referencePoint.x - c.x, y: referencePoint.y - c.y };
-      const vLen = Math.sqrt(v.x * v.x + v.y * v.y);
-      if (vLen === 0) continue;
-      const pt: Point = { x: c.x + (v.x / vLen) * entity.radius, y: c.y + (v.y / vLen) * entity.radius };
-      const angle = Math.atan2(pt.y - c.y, pt.x - c.x);
-      if (entity instanceof Arc && !entity.angleInSweep(angle)) continue;
-      if (dist(worldPos, pt) <= tolerance) return pt;
+      if (dist(referencePoint, c) <= degenerate) continue; // from the center every radius is perpendicular
+      const angle = Math.atan2(referencePoint.y - c.y, referencePoint.x - c.x);
+      for (const a of [angle, angle + Math.PI]) {
+        if (entity instanceof Arc && !entity.angleInSweep(a)) continue;
+        points.push({ x: c.x + entity.radius * Math.cos(a), y: c.y + entity.radius * Math.sin(a) });
+      }
     }
   }
-  return null;
+  return closestOf(
+    worldPos,
+    points.filter((pt) => dist(referencePoint, pt) > degenerate),
+    tolerance,
+  );
 }
 
 /** Points on a circle/arc where a line from referencePoint touches tangentially. */
@@ -210,6 +215,7 @@ function findTangent(
   referencePoint: Point | null,
 ): Point | null {
   if (referencePoint === null) return null;
+  const points: Point[] = [];
   for (const entity of entities) {
     if (entity instanceof Circle || entity instanceof Arc) {
       const c = entity.center, r = entity.radius;
@@ -221,12 +227,11 @@ function findTangent(
 
       for (const angle of [theta + alpha, theta - alpha]) {
         if (entity instanceof Arc && !entity.angleInSweep(angle)) continue;
-        const pt: Point = { x: c.x + r * Math.cos(angle), y: c.y + r * Math.sin(angle) };
-        if (dist(worldPos, pt) <= tolerance) return pt;
+        points.push({ x: c.x + r * Math.cos(angle), y: c.y + r * Math.sin(angle) });
       }
     }
   }
-  return null;
+  return closestOf(worldPos, points, tolerance);
 }
 
 /** Fallback for Center: hovering the exact center point is a tiny target --
@@ -235,7 +240,10 @@ function findTangent(
  *  as the cursor nears the object. */
 function findCenterOnCurve(worldPos: Point, entities: Entity[], tolerance: number): Point | null {
   for (const entity of entities) {
-    if ((entity instanceof Circle || entity instanceof Arc) && entity.hitTest(worldPos, tolerance)) {
+    if (
+      (entity instanceof Circle || entity instanceof Arc || entity instanceof Ellipse) &&
+      entity.hitTest(worldPos, tolerance)
+    ) {
       return { ...entity.center };
     }
   }
@@ -243,6 +251,7 @@ function findCenterOnCurve(worldPos: Point, entities: Entity[], tolerance: numbe
 }
 
 function findNearest(worldPos: Point, entities: Entity[], tolerance: number): Point | null {
+  const points: Point[] = [];
   for (const entity of entities) {
     if (entity instanceof Line) {
       const { startPoint: p1, endPoint: p2 } = entity;
@@ -252,8 +261,7 @@ function findNearest(worldPos: Point, entities: Entity[], tolerance: number): Po
       if (lenSq === 0) continue;
       let u = ((worldPos.x - p1.x) * px + (worldPos.y - p1.y) * py) / lenSq;
       u = Math.max(0, Math.min(1, u));
-      const nearest: Point = { x: p1.x + u * px, y: p1.y + u * py };
-      if (dist(worldPos, nearest) <= tolerance) return nearest;
+      points.push({ x: p1.x + u * px, y: p1.y + u * py });
     } else if (entity instanceof Circle || entity instanceof Arc) {
       const v = { x: worldPos.x - entity.center.x, y: worldPos.y - entity.center.y };
       const vLen = Math.sqrt(v.x * v.x + v.y * v.y);
@@ -266,16 +274,22 @@ function findNearest(worldPos: Point, entities: Entity[], tolerance: number): Po
         const angle = Math.atan2(nearest.y - entity.center.y, nearest.x - entity.center.x);
         if (!entity.angleInSweep(angle)) continue;
       }
-      if (dist(worldPos, nearest) <= tolerance) return nearest;
+      points.push(nearest);
+    } else if (entity instanceof Ellipse) {
+      const nearest = entity.nearestBoundaryPoint(worldPos);
+      if (nearest !== null && entity.hitTest(worldPos, tolerance)) points.push(nearest);
     }
   }
-  return null;
+  return closestOf(worldPos, points, tolerance);
 }
 
 /** Scans `allEntities` and returns the highest-priority snap point within
  *  `tolerance`, or null if nothing resolves. `referencePoint` (the previous
  *  point picked in the active command, e.g. a line's start point) enables
- *  the direction-dependent Perpendicular/Tangent osnaps. */
+ *  the direction-dependent Perpendicular/Tangent osnaps -- it has to be a
+ *  point that stays where it is while the cursor moves, never the point
+ *  being dragged: from the cursor itself, every point of a line is the
+ *  foot of a perpendicular. */
 export function findSnap(
   worldPos: Point,
   allEntities: Entity[],

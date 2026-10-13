@@ -33,7 +33,7 @@ describe("findSnap", () => {
   it("A full Ellipse has no real endpoints to snap to", () => {
     const ellipse = new Ellipse({ x: 0, y: 0 }, 20, 10);
     const match = findSnap({ x: 20.5, y: 0 }, [ellipse], 2);
-    expect(match).toBeNull();
+    expect(match?.snapType).not.toBe("ENDPOINT"); // its axis end there is a Quadrant
   });
 
   it("Midpoint of a Line", () => {
@@ -111,6 +111,60 @@ describe("findSnap", () => {
     const match = findSnap({ x: 2.55, y: 0.05 }, [line], 0.5, reference);
     expect(match?.snapType).toBe("PERPENDICULAR");
     expect(match?.point).toEqual({ x: 2.5, y: 0 });
+  });
+
+  it("Perpendicular: away from the real foot, a point on the line is only Nearest", () => {
+    const line = new Line({ x: 0, y: 0 }, { x: 100, y: 0 });
+    const match = findSnap({ x: 70, y: 0.1 }, [line], 2, { x: 20, y: 30 }); // the foot is (20,0)
+    expect(match?.snapType).toBe("NEAREST");
+  });
+
+  it("Perpendicular: a reference point on the line itself has no foot on it", () => {
+    const a = new Line({ x: 0, y: 0 }, { x: 100, y: 0 });
+    // From a's own end, or from a point along it: the "foot" is that point.
+    expect(findSnap({ x: 20.1, y: 0.1 }, [a], 2, { x: 20, y: 0 })?.snapType).toBe("NEAREST");
+  });
+
+  it("Perpendicular onto a Circle: the near side and the far side", () => {
+    const circle = new Circle({ x: 0, y: 0 }, 10);
+    const reference = { x: 30, y: 40 }; // along the 3-4-5 direction
+    const near = findSnap({ x: 6.1, y: 8 }, [circle], 0.5, reference);
+    expect(near?.snapType).toBe("PERPENDICULAR");
+    expect(near?.point.x).toBeCloseTo(6, 6);
+    expect(near?.point.y).toBeCloseTo(8, 6);
+    const far = findSnap({ x: -6.1, y: -8 }, [circle], 0.5, reference);
+    expect(far?.snapType).toBe("PERPENDICULAR");
+    expect(far?.point.x).toBeCloseTo(-6, 6);
+    expect(far?.point.y).toBeCloseTo(-8, 6);
+  });
+
+  it("the closest point of a kind wins, not the first entity in the drawing", () => {
+    const a = new Line({ x: 0, y: 0 }, { x: 50, y: 0 });
+    const b = new Line({ x: 51.5, y: 0 }, { x: 90, y: 30 });
+    const match = findSnap({ x: 51.2, y: 0 }, [a, b], 2);
+    expect(match?.snapType).toBe("ENDPOINT");
+    expect(match?.point).toEqual({ x: 51.5, y: 0 });
+  });
+
+  it("Midpoint of an Arc", () => {
+    const arc = new Arc({ x: 0, y: 0 }, 10, 0, Math.PI / 2);
+    const mid = { x: 10 * Math.SQRT1_2, y: 10 * Math.SQRT1_2 };
+    const match = findSnap({ x: mid.x + 0.1, y: mid.y }, [arc], 1);
+    expect(match?.snapType).toBe("MIDPOINT");
+    expect(match?.point.x).toBeCloseTo(mid.x, 6);
+    expect(match?.point.y).toBeCloseTo(mid.y, 6);
+  });
+
+  it("Ellipse: center, axis ends (Quadrant) and a point on the curve (Nearest)", () => {
+    const ellipse = new Ellipse({ x: 0, y: 0 }, 20, 10);
+    expect(findSnap({ x: 0.2, y: 0.1 }, [ellipse], 1)).toEqual({ point: { x: 0, y: 0 }, snapType: "CENTER" });
+    const quadrant = findSnap({ x: 20.2, y: 0.1 }, [ellipse], 1);
+    expect(quadrant?.snapType).toBe("QUADRANT");
+    expect(quadrant?.point.x).toBeCloseTo(20, 6);
+    const line = new Line({ x: -30, y: 5 }, { x: 30, y: 5 });
+    const crossing = findSnap({ x: 17.3, y: 5 }, [ellipse, line], 1);
+    expect(crossing?.snapType).toBe("INTERSECTION");
+    expect(crossing?.point.x).toBeCloseTo(20 * Math.sqrt(0.75), 6);
   });
 
   it("Perpendicular is null without a reference point", () => {

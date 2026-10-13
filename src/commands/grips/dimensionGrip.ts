@@ -49,13 +49,13 @@ export class DimensionGripCommand extends BaseCommand {
 
   leftClick(worldPos: Point): void {
     if (this.dimension === null || this.key === null || this.originalPoint === null) return;
-    const { point } = this.engine.snap(worldPos, this.originalPoint);
+    const { point } = this.engine.snap(worldPos);
     this.execute(this.dimension.constrainGrip(this.key, point));
   }
 
   mouseMove(worldPos: Point): void {
     if (this.dimension === null || this.key === null || this.originalPoint === null) return;
-    const { point } = this.engine.snap(worldPos, this.originalPoint);
+    const { point } = this.engine.snap(worldPos);
     const constrained = this.dimension.constrainGrip(this.key, point);
     this.currentPoint = constrained;
     this.commandBar.setLiveValue(`${constrained.x.toFixed(2)}, ${constrained.y.toFixed(2)}`);

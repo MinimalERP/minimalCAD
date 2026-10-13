@@ -49,7 +49,7 @@ export class ArcCommand extends BaseCommand {
       const { point } = this.engine.snap(worldPos, this.p1);
       this.commitEndPoint(point);
     } else {
-      const { point } = this.engine.snap(worldPos, this.p2);
+      const { point } = this.engine.snap(worldPos);
       const fit = circumcircleThrough3Points(this.p1!, this.p2!, point);
       if (fit === null) {
         this.commandBar.setStatus("ARC", "Points are collinear - pick a different point");
@@ -69,7 +69,8 @@ export class ArcCommand extends BaseCommand {
   }
 
   mouseMove(worldPos: Point): void {
-    const reference = this.state === 1 ? this.p1 : this.state === 2 ? this.p2 : null;
+    // The third pick is a point ON the arc: nothing straight runs to it.
+    const reference = this.state === 1 ? this.p1 : null;
     const { point } = this.engine.snap(worldPos, reference);
     this.currentMousePos = point;
 

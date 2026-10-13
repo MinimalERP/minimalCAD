@@ -207,9 +207,12 @@ export class Engine {
    *  radius, or falls through to the raw click point untouched.
    *  `referencePoint` (the previous point picked in the active command, e.g.
    *  a line's start point) enables the direction-dependent Perpendicular/
-   *  Tangent osnaps. */
-  snap(worldPos: Point, referencePoint: Point | null = null): SnapResult {
-    const candidates = this.underlay.length > 0 ? [...this.document.getEntities(), ...this.underlay] : this.document.getEntities();
+   *  Tangent osnaps -- a point that stays put, never the one being dragged.
+   *  `exclude` is the entity a grip is reshaping: its own old geometry is
+   *  no snap target for its own new shape. */
+  snap(worldPos: Point, referencePoint: Point | null = null, exclude: Entity | null = null): SnapResult {
+    const all = this.underlay.length > 0 ? [...this.document.getEntities(), ...this.underlay] : this.document.getEntities();
+    const candidates = exclude === null ? all : all.filter((e) => e !== exclude);
     const tolerance = this.pickTolerance(10.0);
     const match =
       this.originSnap && Math.hypot(worldPos.x, worldPos.y) <= tolerance

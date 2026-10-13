@@ -54,15 +54,14 @@ export class ExportPdfCommand extends BaseCommand {
       this.state = 1;
       this.commandBar.setStatus("PDF EXPORT", "Pick Opposite Corner (or type w,h)");
     } else if (this.state === 1) {
-      const { point } = this.engine.snap(worldPos, this.corner1);
+      const { point } = this.engine.snap(worldPos);
       this.finishWindow(point);
     }
     this.engine.requestRedraw();
   }
 
   mouseMove(worldPos: Point): void {
-    const reference = this.state === 1 ? this.corner1 : null;
-    const { point } = this.engine.snap(worldPos, reference);
+    const { point } = this.engine.snap(worldPos);
     this.currentMousePos = point;
     this.engine.requestRedraw();
   }

@@ -40,11 +40,18 @@ export class ExtendGripCommand extends BaseCommand {
    * Where the dragged end goes: along the line's own direction, so the drag
    * only makes it longer or shorter. A snap onto other geometry (or a typed
    * point) still puts the end exactly there, which is how it gets re-aimed.
+   * Perpendicular / Tangent are measured from the end that stays put -- from
+   * the dragged end itself every point of a line would count as one.
    */
   private resolve(worldPos: Point): Point {
-    const { point, snapType } = this.engine.snap(worldPos, this.currentPos!);
-    if (snapType !== null) return point;
-    const fixed = this.isStart ? this.entity!.endPoint : this.entity!.startPoint;
+    const fixed = this.fixedEnd();
+    const { point, snapType } = this.engine.snap(worldPos, fixed, this.entity);
+    if (snapType !== null) {
+      // A snap onto the fixed end (a neighbour's corner there) would leave
+      // a line of no length.
+      if (Math.hypot(point.x - fixed.x, point.y - fixed.y) > this.engine.pickTolerance() * 1e-3) return point;
+      this.engine.clearSnapFeedback();
+    }
     const grabbed = this.isStart ? this.entity!.startPoint : this.entity!.endPoint;
     const len = Math.hypot(grabbed.x - fixed.x, grabbed.y - fixed.y);
     if (len === 0) return point;
