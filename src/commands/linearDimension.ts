@@ -38,10 +38,9 @@ export class LinearDimensionCommand extends BaseCommand {
     const { point, snapType } = this.engine.snap(worldPos, reference);
 
     if (this.state === 0) {
-      // A click ON a line -- anywhere along it, its middle included, but not
-      // on an end, a crossing or a centre, which are point picks: the whole
-      // line is what is dimensioned, its two ends, straight to placing the text.
-      const pointPick = snapType === "ENDPOINT" || snapType === "INTERSECTION" || snapType === "CENTER" || snapType === "QUADRANT";
+      // Any resolved osnap is an explicit point pick, including midpoint and
+      // nearest. Auto-dimension the whole line only when the click has no snap.
+      const pointPick = snapType !== null;
       const whole = pointPick ? null : lineUnder(this.engine, worldPos);
       if (whole !== null) {
         this.p1 = whole.startPoint;
