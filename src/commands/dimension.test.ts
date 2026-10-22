@@ -179,7 +179,7 @@ describe("dimensioning a line by clicking it", () => {
     engine.document.addEntity(new Line({ x: 0, y: 0 }, { x: 80, y: 0 }));
     const cmd = new LinearDimensionCommand(engine);
     cmd.start();
-    cmd.leftClick({ x: 30, y: 0 }); // on the line, away from its ends and middle
+    cmd.leftClick({ x: 20, y: 0 }); // on the line, outside the midpoint snap radius
     cmd.leftClick({ x: 40, y: -20 });
     const [dim] = dims(engine);
     expect(dim!.dimType).toBe("linear");
