@@ -38,9 +38,9 @@ export class LinearDimensionCommand extends BaseCommand {
     const { point, snapType } = this.engine.snap(worldPos, reference);
 
     if (this.state === 0) {
-      // Any resolved osnap is an explicit point pick, including midpoint and
-      // nearest. Auto-dimension the whole line only when the click has no snap.
-      const pointPick = snapType !== null;
+      // Named snaps are explicit point picks, including midpoint. NEAREST is
+      // the ordinary line hit and keeps whole-line auto-dimensioning available.
+      const pointPick = snapType !== null && snapType !== "NEAREST";
       const whole = pointPick ? null : lineUnder(this.engine, worldPos);
       if (whole !== null) {
         this.p1 = whole.startPoint;
