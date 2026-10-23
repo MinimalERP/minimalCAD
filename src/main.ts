@@ -17,6 +17,7 @@ import { OVERLAY_LABEL, cycleOverlayMode, overlayMode } from "./ui/overlayMode";
 import "./style.css";
 import { CanvasView } from "./ui/canvasView";
 import { CommandBar } from "./ui/commandBar";
+import { commandSuggestions } from "./commands/registry";
 import { buildToolbar, type ToolbarHandle } from "./ui/toolbar";
 import { buildTabBar } from "./ui/tabBar";
 import type { TabBarHost, TabBar } from "./ui/tabBar";
@@ -158,7 +159,10 @@ commandBar.addEventListener("inputSubmitted", (e) => {
     workspace.textInput((e as CustomEvent<string>).detail);
     return;
   }
-  getActiveEngine().commandManager.textInput((e as CustomEvent<string>).detail);
+  const manager = getActiveEngine().commandManager;
+  const typed = (e as CustomEvent<string>).detail;
+  if (manager.currentCommand === null) manager.tryStartFromText(typed);
+  else manager.textInput(typed);
   // A typed value always wins over a finger still down mid touch point-pick
   // preview -- see canvasView.ts's own doc comment on this method.
   view.discardInFlightTouchPointPick();
@@ -174,7 +178,13 @@ commandBar.addEventListener("escapePressed", () => {
 });
 // Drives a live typing preview (e.g. TextCommand's ghost string) -- the
 // command itself just reads commandBar.text() from its own draw().
-commandBar.addEventListener("textChanged", () => view.requestRedraw());
+commandBar.addEventListener("textChanged", (e) => {
+  const manager = getActiveEngine().commandManager;
+  if (!workspace.isModel() && manager.currentCommand === null) {
+    commandBar.showCommandSuggestion(commandSuggestions((e as CustomEvent<string>).detail)[0] ?? null);
+  }
+  view.requestRedraw();
+});
 // Whenever the command bar stops accepting text (between point-picks mid-
 // command, or back at READY), hand keyboard focus back to the canvas so
 // Escape/Delete/single-letter typed commands keep working -- see

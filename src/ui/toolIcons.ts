@@ -77,6 +77,17 @@ function drawRectangle(ctx: CanvasRenderingContext2D): void {
   ctx.strokeRect(2, 4, 16, 12);
 }
 
+function drawPolygon(ctx: CanvasRenderingContext2D): void {
+  ctx.beginPath();
+  ctx.moveTo(10, 2);
+  ctx.lineTo(18, 7);
+  ctx.lineTo(15, 17);
+  ctx.lineTo(5, 17);
+  ctx.lineTo(2, 7);
+  ctx.closePath();
+  ctx.stroke();
+}
+
 function drawCircle(ctx: CanvasRenderingContext2D): void {
   ctx.beginPath();
   ctx.arc(10, 10, 8, 0, 2 * Math.PI);
@@ -910,6 +921,7 @@ const DRAWERS: Record<string, Drawer> = {
   line: drawLine,
   arc: drawArc,
   rectangle: drawRectangle,
+  polygon: drawPolygon,
   circle: drawCircle,
   ellipse: drawEllipse,
   text: drawText,

@@ -13,6 +13,7 @@ import { CircleCommand } from "./circle";
 import { ArcCommand } from "./arc";
 import { EllipseCommand } from "./ellipse";
 import { RectangleCommand } from "./rectangle";
+import { PolygonCommand } from "./polygon";
 import { MoveCommand } from "./move";
 import { CopyCommand } from "./copy";
 import { RotateCommand } from "./rotate";
@@ -54,6 +55,7 @@ export const COMMAND_REGISTRY: Record<string, RegistryEntry> = {
   arc: { factory: (engine) => new ArcCommand(engine), aliases: ["a"] },
   ellipse: { factory: (engine) => new EllipseCommand(engine), aliases: ["el"] },
   rectangle: { factory: (engine) => new RectangleCommand(engine), aliases: ["r", "rec"] },
+  polygon: { factory: (engine) => new PolygonCommand(engine), aliases: ["pol"] },
   move: { factory: (engine) => new MoveCommand(engine), aliases: ["m"] },
   copy: { factory: (engine) => new CopyCommand(engine), aliases: ["co", "cp"] },
   rotate: { factory: (engine) => new RotateCommand(engine), aliases: ["ro"] },
@@ -92,6 +94,23 @@ export const COMMAND_REGISTRY: Record<string, RegistryEntry> = {
   dimensiongrip: { factory: (engine) => new DimensionGripCommand(engine), aliases: [] },
   edittext: { factory: (engine) => new EditTextCommand(engine), aliases: [] },
 };
+
+/** Prefix matches for typed command entry. Exact shortcuts win (so `m` is
+ * Move while `mi` is Mirror); longer names remain discoverable by typing. */
+export function commandSuggestions(query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const matches = Object.entries(COMMAND_REGISTRY)
+    .filter(([name]) => !name.endsWith("grip") && !name.startsWith("grip") && name !== "edittext")
+    .map(([name, entry]) => ({ name, aliases: entry.aliases }))
+    .filter(({ name, aliases }) => name.startsWith(q) || aliases.some((alias) => alias.startsWith(q)))
+    .sort((a, b) => {
+      const exactA = a.name === q || a.aliases.includes(q) ? 0 : 1;
+      const exactB = b.name === q || b.aliases.includes(q) ? 0 : 1;
+      return exactA - exactB || a.name.localeCompare(b.name);
+    });
+  return matches.map(({ name }) => name);
+}
 
 /** Grip-entry-only commands excluded from blank-Enter "repeat last command" --
  *  a blank Enter after a grip edit shouldn't re-arm a grip tool with nothing to act on. */

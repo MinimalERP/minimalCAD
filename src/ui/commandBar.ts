@@ -268,6 +268,7 @@ export class CommandBar extends EventTarget {
    * first suggestion, not to empty text).
    */
   showSuggestions(names: string[]): void {
+    this.suggestionsList.classList.remove("command-suggestion-list");
     this.suggestionNames = names;
     this.suggestionIndex = names.length > 0 ? 0 : -1;
     this.suggestionsList.replaceChildren();
@@ -285,11 +286,29 @@ export class CommandBar extends EventTarget {
     this.renderSuggestionHighlight();
   }
 
+  /** Minimal single-line command hint used while typing a command name. */
+  showCommandSuggestion(name: string | null): void {
+    this.suggestionsList.classList.add("command-suggestion-list");
+    this.suggestionNames = name === null ? [] : [name];
+    this.suggestionIndex = name === null ? -1 : 0;
+    this.suggestionsList.replaceChildren();
+    if (name !== null) {
+      const row = document.createElement("div");
+      row.className = "suggestion-row command-suggestion-row";
+      row.textContent = name;
+      row.addEventListener("mousedown", (e) => e.preventDefault());
+      row.addEventListener("click", () => this.acceptSuggestion(name));
+      this.suggestionsList.appendChild(row);
+    }
+    this.suggestionsList.hidden = name === null;
+  }
+
   hideSuggestions(): void {
     this.suggestionsList.hidden = true;
     this.suggestionsList.replaceChildren();
     this.suggestionNames = [];
     this.suggestionIndex = -1;
+    this.suggestionsList.classList.remove("command-suggestion-list");
   }
 
   enableDualInput(distanceDefault = "0.00", angleDefault = "0.0"): void {

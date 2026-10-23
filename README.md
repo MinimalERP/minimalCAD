@@ -28,7 +28,7 @@ npm run lint       # eslint
 
 ## What's implemented (v1)
 
-- **Draw**: Line, Circle, Arc, Rectangle (draws 4 independent Lines, matching the desktop app), Polyline (load/render/edit only — no draw tool yet)
+- **Draw**: Line, Circle, Arc, Rectangle, regular Polygon (3-1024 sides; inscribed or circumscribed), Polyline (load/render/edit only — no draw tool yet)
 - **Edit**: Move, Copy (incl. array-copy count), Rotate, Scale, Mirror, Trim, Offset, Fillet (Line-Line, Line-Arc, Arc-Arc), Chamfer — every drawable entity type (Line/Circle/Arc) works with every edit command that geometrically applies to it (Fillet/Chamfer never applied to whole circles in the desktop app either — that's not a gap)
 - **Selection**: click, Shift-additive, window/crossing rubber-band, direct click-drag, Delete
 - **Grips**: line endpoint extend, line/circle move, circle radius resize

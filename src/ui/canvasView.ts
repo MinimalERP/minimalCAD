@@ -38,6 +38,7 @@ import type { Viewport } from "../engine/viewport";
 import { pointDistance, type Point } from "../core/types";
 import type { Entity } from "../entities/entity";
 import type { Engine } from "../engine/engine";
+import { commandSuggestions } from "../commands/registry";
 import type { GripCommand } from "../commands/types";
 import { Text } from "../entities/text";
 import { Dimension } from "../entities/dimension";
@@ -1018,8 +1019,10 @@ export class CanvasView {
       if (quickEditTarget !== null && this.engine.quickEdit.hasBuffer()) {
         this.engine.quickEdit.submit(quickEditTarget);
       } else if (this.commandBuffer !== "") {
-        this.engine.commandManager.tryStartFromText(this.commandBuffer);
+        const best = commandSuggestions(this.commandBuffer)[0];
+        this.engine.commandManager.tryStartFromText(best ?? this.commandBuffer);
         this.commandBuffer = "";
+        this.engine.commandBar.hideSuggestions();
       } else {
         this.engine.commandManager.repeatLast();
       }
@@ -1035,6 +1038,7 @@ export class CanvasView {
     if (e.key === "Backspace" && this.commandBuffer !== "") {
       this.commandBuffer = this.commandBuffer.slice(0, -1);
       this.engine.commandBar.setTypedCommand(this.commandBuffer);
+      this.engine.commandBar.showCommandSuggestion(commandSuggestions(this.commandBuffer)[0] ?? null);
       e.preventDefault();
       return;
     }
@@ -1054,6 +1058,7 @@ export class CanvasView {
     if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
       this.commandBuffer += e.key.toLowerCase();
       this.engine.commandBar.setTypedCommand(this.commandBuffer);
+      this.engine.commandBar.showCommandSuggestion(commandSuggestions(this.commandBuffer)[0] ?? null);
       e.preventDefault();
     }
   }

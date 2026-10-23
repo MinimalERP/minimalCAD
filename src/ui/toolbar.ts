@@ -36,6 +36,7 @@ const DISPLAY_NAMES: Record<string, string> = {
   arc: "Arc",
   ellipse: "Ellipse",
   rectangle: "Rectangle",
+  polygon: "Polygon - regular polygon: side count, center, inscribed/circumscribed, radius or edge distance",
   move: "Move",
   copy: "Copy",
   rotate: "Rotate",
@@ -73,7 +74,7 @@ const DISPLAY_NAMES: Record<string, string> = {
 // actually has; entries the desktop has but this port doesn't yet (table,
 // linetype) are simply absent until their features land, not stubbed.
 const COMMAND_GROUPS: readonly (readonly string[])[] = [
-  ["line", "arc", "rectangle", "circle", "ellipse", "text"],
+  ["line", "arc", "rectangle", "polygon", "circle", "ellipse", "text"],
   [
     "move",
     "copy",
@@ -97,7 +98,7 @@ const COMMAND_GROUPS: readonly (readonly string[])[] = [
  *  profiles, plus EVERY modify tool and the dimensions. Text, leader and the
  *  library / PDF tools are drafting-only: they make no profile. */
 const SKETCH_GROUPS: readonly (readonly string[])[] = [
-  ["line", "arc", "rectangle", "circle", "ellipse"],
+  ["line", "arc", "rectangle", "polygon", "circle", "ellipse"],
   ["move", "copy", "rotate", "polararray", "trim", "extend", "offset", "mirror", "fillet", "chamfer", "join", "explode", "scale"],
   ["constrain", "horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident"],
   ["linear", "aligned", "angular", "diameter", "radius"],

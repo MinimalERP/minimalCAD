@@ -373,21 +373,22 @@ export class ModelController {
       else if (wp !== undefined) this.pickSketchPlane(wp.id);
       return;
     }
-    if (["e", "ext", "extrude"].includes(t)) this.action("extrude");
-    else if (["r", "rev", "revolve"].includes(t)) this.action("revolve");
-    else if (["h", "hole"].includes(t)) this.action("hole");
-    else if (["pat", "pattern"].includes(t)) this.action("pattern");
-    else if (["cpat", "circular"].includes(t)) this.action("circpattern");
-    else if (["mir", "mirror"].includes(t)) this.action("mirror3d");
-    else if (["f", "fillet"].includes(t)) this.action("fillet");
-    else if (["ro", "rot", "rotate"].includes(t)) this.action("rotate3d");
-    else if (["l3", "l", "line", "3dline", "line3d"].includes(t)) this.action("line3d");
-    else if (["mea", "measure", "ma", "ang", "angle"].includes(t)) this.action("measureangle");
-    else if (["di", "dist", "distance"].includes(t)) this.action("measuredist");
-    else if (["sm", "sheet", "sheetmetal"].includes(t)) this.action("sheetmetal");
-    else if (["ch", "cha", "chamfer"].includes(t)) this.action("chamfer");
-    else if (["s", "sk", "sketch"].includes(t)) this.action("newsketch");
-    else if (["wp", "plane", "workplane", "ucs"].includes(t)) this.action("workplane");
+    const commands: Array<[string, string[], ModelAction]> = [
+      ["extrude", ["e", "ext"], "extrude"], ["revolve", ["r", "rev"], "revolve"],
+      ["hole", ["h"], "hole"], ["pattern", ["pat"], "pattern"],
+      ["circpattern", ["cpat", "circular"], "circpattern"], ["mirror3d", ["mir", "mirror"], "mirror3d"],
+      ["fillet", ["f"], "fillet"], ["rotate3d", ["ro", "rot", "rotate"], "rotate3d"],
+      ["line3d", ["l3", "l", "line", "3dline"], "line3d"],
+      ["measureangle", ["mea", "measure", "ma", "ang", "angle"], "measureangle"],
+      ["measuredist", ["di", "dist", "distance"], "measuredist"],
+      ["sheetmetal", ["sm", "sheet"], "sheetmetal"], ["chamfer", ["ch", "cha"], "chamfer"],
+      ["newsketch", ["s", "sk", "sketch"], "newsketch"],
+      ["workplane", ["wp", "plane", "ucs"], "workplane"],
+    ];
+    const exact = commands.find(([name, aliases]) => name === t || aliases.includes(t));
+    const prefix = commands.find(([name, aliases]) => name.startsWith(t) || aliases.some((alias) => alias.startsWith(t)));
+    const resolved = exact ?? prefix;
+    if (resolved !== undefined) this.action(resolved[2]);
     else if (t !== "") this.host.commandBar.setStatus("3D", `Unknown command "${t}" - try E (extrude), R (revolve), H (hole), F (fillet), CH (chamfer), RO (rotate), L (3D line), MEA (measure), DI (distance), SM (sheet metal), S (sketch), WP`);
   }
 

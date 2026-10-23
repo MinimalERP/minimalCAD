@@ -219,7 +219,7 @@ body {
 
 .tab-close:hover {
   background: #3c3c3c;
-  color: #ffffff;
+  color: #00ffff;
 }
 
 .tab-new {
@@ -478,7 +478,29 @@ body {
 
 #command-bar .suggestion-row.active {
   background: #094771;
-  color: #ffffff;
+  color: #00ffff;
+}
+
+#command-bar .suggestions-list.command-suggestion-list {
+  max-height: none;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+#command-bar .suggestion-row.command-suggestion-row {
+  padding: 2px 8px 6px;
+  border: 0;
+  background: transparent;
+  color: #00ffff;
+  cursor: default;
+}
+
+#command-bar .suggestion-row.command-suggestion-row.active {
+  background: transparent;
+  color: #00ffff;
 }
 
 #command-bar .prompt-label {
