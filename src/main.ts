@@ -180,8 +180,9 @@ commandBar.addEventListener("escapePressed", () => {
 // command itself just reads commandBar.text() from its own draw().
 commandBar.addEventListener("textChanged", (e) => {
   const manager = getActiveEngine().commandManager;
-  if (!workspace.isModel() && manager.currentCommand === null) {
-    commandBar.showCommandSuggestion(commandSuggestions((e as CustomEvent<string>).detail)[0] ?? null);
+  if (manager.currentCommand === null) {
+    const commandWorkspace = workspace.isModel() ? "3d" : "2d";
+    commandBar.showCommandSuggestion(commandSuggestions((e as CustomEvent<string>).detail, commandWorkspace)[0] ?? null);
   }
   view.requestRedraw();
 });

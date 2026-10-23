@@ -95,21 +95,56 @@ export const COMMAND_REGISTRY: Record<string, RegistryEntry> = {
   edittext: { factory: (engine) => new EditTextCommand(engine), aliases: [] },
 };
 
-/** Prefix matches for typed command entry. Exact shortcuts win (so `m` is
- * Move while `mi` is Mirror); longer names remain discoverable by typing. */
-export function commandSuggestions(query: string): string[] {
+const DRAW_COMMANDS = new Set([
+  "line", "circle", "arc", "ellipse", "rectangle", "polygon", "text",
+  "linear", "aligned", "angular", "diameter", "radius", "leader",
+]);
+const EDIT_COMMANDS = new Set([
+  "move", "copy", "rotate", "scale", "mirror", "polararray", "trim", "extend",
+  "offset", "fillet", "chamfer", "join", "explode",
+]);
+
+const MODEL_COMMANDS: Array<{ name: string; aliases: string[]; group: number }> = [
+  { name: "line3d", aliases: ["l3", "l", "line", "3dline"], group: 0 },
+  { name: "newsketch", aliases: ["s", "sk", "sketch"], group: 0 },
+  { name: "fillet", aliases: ["f"], group: 1 },
+  { name: "chamfer", aliases: ["ch", "cha"], group: 1 },
+  { name: "mirror3d", aliases: ["mir", "mirror"], group: 1 },
+  { name: "rotate3d", aliases: ["ro", "rot", "rotate"], group: 1 },
+  { name: "extrude", aliases: ["e", "ext"], group: 2 },
+  { name: "revolve", aliases: ["r", "rev"], group: 2 },
+  { name: "hole", aliases: ["h"], group: 2 },
+  { name: "pattern", aliases: ["pat"], group: 2 },
+  { name: "circpattern", aliases: ["cpat", "circular"], group: 2 },
+  { name: "measureangle", aliases: ["mea", "measure", "ma", "ang", "angle"], group: 2 },
+  { name: "measuredist", aliases: ["di", "dist", "distance"], group: 2 },
+  { name: "sheetmetal", aliases: ["sm", "sheet"], group: 2 },
+  { name: "workplane", aliases: ["wp", "plane", "ucs"], group: 2 },
+];
+
+/** Prefix matches are ranked by workflow: draw, edit, then other commands.
+ * Within a group, an exact command or shortcut wins over a longer prefix. */
+export function commandSuggestions(query: string, workspace: "2d" | "3d" = "2d"): string[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  const matches = Object.entries(COMMAND_REGISTRY)
-    .filter(([name]) => !name.endsWith("grip") && !name.startsWith("grip") && name !== "edittext")
-    .map(([name, entry]) => ({ name, aliases: entry.aliases }))
+  const entries = workspace === "3d"
+    ? MODEL_COMMANDS
+    : Object.entries(COMMAND_REGISTRY)
+      .filter(([name]) => !name.endsWith("grip") && !name.startsWith("grip") && name !== "edittext")
+      .map(([name, entry]) => ({
+        name,
+        aliases: entry.aliases,
+        group: DRAW_COMMANDS.has(name) ? 0 : EDIT_COMMANDS.has(name) ? 1 : 2,
+      }));
+  return entries
     .filter(({ name, aliases }) => name.startsWith(q) || aliases.some((alias) => alias.startsWith(q)))
     .sort((a, b) => {
+      if (a.group !== b.group) return a.group - b.group;
       const exactA = a.name === q || a.aliases.includes(q) ? 0 : 1;
       const exactB = b.name === q || b.aliases.includes(q) ? 0 : 1;
-      return exactA - exactB || a.name.localeCompare(b.name);
-    });
-  return matches.map(({ name }) => name);
+      return exactA - exactB;
+    })
+    .map(({ name }) => name);
 }
 
 /** Grip-entry-only commands excluded from blank-Enter "repeat last command" --
