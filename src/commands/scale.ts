@@ -154,7 +154,26 @@ export class ScaleCommand extends PickTransformCommand {
   private executeScale(): void {
     const base = this.basePoint!;
     const factor = this.scaleFactor;
-    this.commitNew((entity) => this.calculateScaleGeometry(entity, base, factor));
+    this.commitMutate((entity) => {
+      const scaled = this.calculateScaleGeometry(entity, base, factor);
+      if (scaled === null) return;
+
+      // Scale modifies the selected drawing in place, like AutoCAD's SCALE.
+      // Keep the original entity object (and its identity) so the operation
+      // never leaves a duplicate behind.
+      if (entity instanceof Line && scaled instanceof Line) {
+        entity.startPoint = scaled.startPoint;
+        entity.endPoint = scaled.endPoint;
+      } else if (entity instanceof Arc && scaled instanceof Arc) {
+        entity.center = scaled.center;
+        entity.radius = scaled.radius;
+      } else if (entity instanceof Circle && scaled instanceof Circle) {
+        entity.center = scaled.center;
+        entity.radius = scaled.radius;
+      } else if (entity instanceof Polyline && scaled instanceof Polyline) {
+        entity.vertices = scaled.vertices;
+      }
+    });
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
