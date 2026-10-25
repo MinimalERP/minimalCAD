@@ -12,6 +12,17 @@ const fixturePath = fileURLToPath(
 const fixtureText = readFileSync(fixturePath, "utf-8");
 
 describe("Document", () => {
+  it("round-trips embedded image references in JCAD snapshots", () => {
+    const doc = new Document();
+    doc.imageReferences.push({
+      id: "image-1", name: "trace.png", dataUrl: "data:image/png;base64,aGVsbG8=",
+      x: 1, y: 2, width: 30, height: 20, rotation: 12, opacity: 0.4, locked: true,
+    });
+    const restored = new Document();
+    restored.restoreFromDict(JSON.parse(JSON.stringify(doc.toDict())));
+    expect(restored.imageReferences).toEqual(doc.imageReferences);
+  });
+
   it("addEntity/removeEntity/getBounds round-trip", () => {
     const doc = new Document();
     const a = new Line({ x: 0, y: 0 }, { x: 10, y: 0 });

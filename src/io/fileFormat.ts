@@ -52,6 +52,11 @@ export function validateDocumentSnapshot(raw: unknown): ParseJsonResult {
   // parsePart() does the real validation when the 3D workspace loads it).
   if (typeof obj.part === "object" && obj.part !== null && !Array.isArray(obj.part)) snapshot.part = obj.part;
   if (Array.isArray(obj.sheets)) snapshot.sheets = obj.sheets;
+  if (Array.isArray(obj.image_references)) {
+    snapshot.image_references = obj.image_references.filter(
+      (item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item),
+    );
+  }
   return { ok: true, snapshot };
 }
 

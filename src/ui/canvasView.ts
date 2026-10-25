@@ -48,6 +48,11 @@ import { evalNumber } from "../input/dynamicInput";
 import { overlayMode } from "./overlayMode";
 import type { Constraint } from "../core/constraints";
 import { copySelection, pasteClipboard } from "../engine/clipboard";
+import type { ImageReference } from "../core/imageReference";
+import { imageReferenceContains } from "../core/imageReference";
+import { openImageReferenceProperties } from "./imageReferenceProperties";
+import type { ImageReferenceEdit } from "./imageReferenceProperties";
+import { showToast } from "./toast";
 
 const COLOR_BACKGROUND = "#1e1e1e";
 const COLOR_GRID = "#2d2d2d";
@@ -141,6 +146,9 @@ export class CanvasView {
   private redrawScheduled = false;
   private homeInitialized = false;
   private commandBuffer = "";
+  private imageCache = new Map<string, { dataUrl: string; image: HTMLImageElement }>();
+  private imageDrag: { reference: ImageReference; pointerStart: Point; x: number; y: number; before: ReturnType<Engine["document"]["toDict"]>; moved: boolean } | null = null;
+  private imageCalibration: { reference: ImageReference; firstPoint: Point | null } | null = null;
 
   // Rubber-band window/crossing selection state.
   private selectOrigin: Point | null = null;
@@ -259,6 +267,8 @@ export class CanvasView {
     this.selectActive = false;
     this.selectAdditive = false;
     this.commandBuffer = "";
+    this.imageDrag = null;
+    this.imageCalibration = null;
     this.activeTouches.clear();
     this.pendingTouch = null;
     this.touchGesture = null;
@@ -280,6 +290,101 @@ export class CanvasView {
     requestAnimationFrame(() => {
       this.redrawScheduled = false;
       this.render();
+    });
+  }
+
+  /** Opens a local raster file and places it centered as a separate drawing underlay. */
+  insertImageFromFile(): void {
+    if (this.engine.backdrop !== null) {
+      showToast("Insert Image is available in the drafting workspace.");
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png,image/jpeg,image/webp,image/gif";
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (file === undefined) return;
+      if (!file.type.startsWith("image/")) {
+        showToast("Choose a PNG, JPEG, WebP, or GIF image.");
+        return;
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        showToast("Image is larger than 20 MB. Resize it before inserting so the JCAD file stays manageable.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onerror = () => showToast("Could not read this image file.");
+      reader.onload = () => {
+        if (typeof reader.result !== "string") return;
+        const decoded = new Image();
+        decoded.onerror = () => showToast("Could not decode this image file.");
+        decoded.onload = () => this.addImageReference(file.name, reader.result as string, decoded.naturalWidth, decoded.naturalHeight);
+        decoded.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    }, { once: true });
+    input.click();
+  }
+
+  private addImageReference(name: string, dataUrl: string, pixelWidth: number, pixelHeight: number): void {
+    const screenWidth = Math.min(this.canvas.clientWidth * 0.7, this.canvas.clientHeight * 0.7 * pixelWidth / pixelHeight);
+    const width = screenWidth / this.viewport.zoom;
+    const height = width * pixelHeight / pixelWidth;
+    const center = this.viewport.screenToWorld({ x: this.canvas.clientWidth / 2, y: this.canvas.clientHeight / 2 });
+    const reference: ImageReference = {
+      id: `image-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
+      name,
+      dataUrl,
+      x: center.x - width / 2,
+      y: center.y - height / 2,
+      width,
+      height,
+      rotation: 0,
+      opacity: 0.45,
+      locked: true,
+    };
+    const before = this.engine.document.toDict();
+    this.engine.document.imageReferences.push(reference);
+    this.engine.undo.push(before);
+    this.requestRedraw();
+    this.openImageProperties(reference);
+  }
+
+  private openImageProperties(reference: ImageReference): void {
+    const before = this.engine.document.toDict();
+    const original: ImageReferenceEdit = {
+      x: reference.x, y: reference.y, width: reference.width, height: reference.height,
+      rotation: reference.rotation, opacity: reference.opacity, locked: reference.locked,
+    };
+    const apply = (edit: ImageReferenceEdit): void => {
+      const changed = Object.keys(original).some((key) =>
+        edit[key as keyof ImageReferenceEdit] !== original[key as keyof ImageReferenceEdit],
+      );
+      Object.assign(reference, edit);
+      if (changed) this.engine.undo.push(before);
+      this.requestRedraw();
+    };
+    openImageReferenceProperties(reference, {
+      apply,
+      calibrate: (edit) => {
+        apply(edit);
+        this.imageCalibration = { reference, firstPoint: null };
+        this.engine.commandBar.setStatus("IMAGE SCALE", "Click the first end of a known dimension on the image");
+        this.canvas.focus();
+        this.requestRedraw();
+      },
+      remove: () => {
+        const snapshot = this.engine.document.toDict();
+        this.engine.document.imageReferences = this.engine.document.imageReferences.filter((image) => image.id !== reference.id);
+        this.engine.undo.push(snapshot);
+        this.imageCache.delete(reference.id);
+        this.requestRedraw();
+      },
+      preview: (edit) => {
+        Object.assign(reference, edit);
+        this.requestRedraw();
+      },
     });
   }
 
@@ -455,6 +560,21 @@ export class CanvasView {
    */
   private onDoubleClick(e: MouseEvent): void {
     if (e.button !== 0) return;
+    const worldPos = this.viewport.screenToWorld(this.eventToScreenPoint(e));
+    const image = [...this.engine.document.imageReferences].reverse().find((candidate) => imageReferenceContains(candidate, worldPos));
+    if (image !== undefined) {
+      if (this.engine.commandManager.currentCommand !== null) this.engine.cancelCommand();
+      this.dragEntities = null;
+      this.dragLastPos = null;
+      this.dragMoved = false;
+      this.imageDrag = null;
+      this.selectOrigin = null;
+      this.selectCurrent = null;
+      this.selectActive = false;
+      this.openImageProperties(image);
+      e.preventDefault();
+      return;
+    }
     // A value shown on the drawing (an entity's size, a constraint's
     // distance): edit it, even from inside a drawing command -- the first
     // click of the pair may have started one.
@@ -469,7 +589,6 @@ export class CanvasView {
       this.requestRedraw();
       return;
     }
-    const worldPos = this.viewport.screenToWorld(this.eventToScreenPoint(e));
     const tolerance = this.engine.pickTolerance();
     // The second click of the pair may have grabbed one of the shape's own
     // grips (a circle's sit right on its outline): that is this double-click,
@@ -528,6 +647,10 @@ export class CanvasView {
   // actually commits (a tap on release, or a drag past the move threshold). ---
 
   private runPointerDown(worldPos: Point, button: number, shiftHeld: boolean): void {
+    if (this.imageCalibration !== null && button === 0) {
+      this.pickImageCalibrationPoint(worldPos);
+      return;
+    }
     const commandActive = this.engine.commandManager.currentCommand !== null;
 
     if (commandActive) {
@@ -545,6 +668,18 @@ export class CanvasView {
       return;
     }
     if (button !== 0) return; // only the primary button/touch drives selection/grips
+    const imageHit = [...this.engine.document.imageReferences].reverse().find((candidate) => imageReferenceContains(candidate, worldPos));
+    if (imageHit !== undefined && !imageHit.locked) {
+      this.imageDrag = {
+        reference: imageHit,
+        pointerStart: worldPos,
+        x: imageHit.x,
+        y: imageHit.y,
+        before: this.engine.document.toDict(),
+        moved: false,
+      };
+      return;
+    }
     // A click on a value label edits it right there -- and must not
     // deselect or hide the very number being clicked.
     const sp = this.viewport.worldToScreen(worldPos);
@@ -631,6 +766,16 @@ export class CanvasView {
 
   private runPointerMove(worldPos: Point): void {
     this.hoverWorld = worldPos;
+    if (this.imageDrag !== null) {
+      const delta = { x: worldPos.x - this.imageDrag.pointerStart.x, y: worldPos.y - this.imageDrag.pointerStart.y };
+      const threshold = this.engine.pickTolerance(3.0);
+      if (!this.imageDrag.moved && Math.abs(delta.x) < threshold && Math.abs(delta.y) < threshold) return;
+      this.imageDrag.moved = true;
+      this.imageDrag.reference.x = this.imageDrag.x + delta.x;
+      this.imageDrag.reference.y = this.imageDrag.y + delta.y;
+      this.requestRedraw();
+      return;
+    }
     if (this.dragEntities !== null && this.dragLastPos !== null) {
       const delta = { x: worldPos.x - this.dragLastPos.x, y: worldPos.y - this.dragLastPos.y };
       if (!this.dragMoved) {
@@ -659,6 +804,12 @@ export class CanvasView {
   }
 
   private runPointerUp(): void {
+    if (this.imageDrag !== null) {
+      if (this.imageDrag.moved) this.engine.undo.push(this.imageDrag.before);
+      this.imageDrag = null;
+      this.requestRedraw();
+      return;
+    }
     this.engine.commandManager.leftRelease();
     if (this.dragEntities !== null) {
       this.dragEntities = null;
@@ -952,6 +1103,15 @@ export class CanvasView {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    if (this.imageCalibration !== null) {
+      if (e.key === "Escape") {
+        this.imageCalibration = null;
+        this.engine.commandBar.setReady();
+        this.requestRedraw();
+      }
+      e.preventDefault();
+      return;
+    }
     // F8 (Ortho) is handled window-wide in main.ts: it has to work while the
     // command bar's distance / angle field holds focus, not just the canvas.
     if (e.key === "Escape") {
@@ -1111,6 +1271,67 @@ export class CanvasView {
     this.ctx.restore();
   }
 
+  private drawImageReferences(): void {
+    const liveIds = new Set(this.engine.document.imageReferences.map((reference) => reference.id));
+    for (const id of this.imageCache.keys()) if (!liveIds.has(id)) this.imageCache.delete(id);
+    for (const reference of this.engine.document.imageReferences) {
+      let cached = this.imageCache.get(reference.id);
+      if (cached === undefined || cached.dataUrl !== reference.dataUrl) {
+        const image = new Image();
+        image.onload = () => this.requestRedraw();
+        image.src = reference.dataUrl;
+        cached = { dataUrl: reference.dataUrl, image };
+        this.imageCache.set(reference.id, cached);
+      }
+      if (!cached.image.complete || cached.image.naturalWidth === 0) continue;
+      const center = this.viewport.worldToScreen({ x: reference.x + reference.width / 2, y: reference.y + reference.height / 2 });
+      this.ctx.save();
+      this.ctx.globalAlpha = reference.opacity;
+      this.ctx.translate(center.x, center.y);
+      this.ctx.rotate((reference.rotation * Math.PI) / 180);
+      this.ctx.drawImage(cached.image, -reference.width * this.viewport.zoom / 2, -reference.height * this.viewport.zoom / 2,
+        reference.width * this.viewport.zoom, reference.height * this.viewport.zoom);
+      this.ctx.restore();
+    }
+  }
+
+  private pickImageCalibrationPoint(worldPos: Point): void {
+    const calibration = this.imageCalibration;
+    if (calibration === null) return;
+    if (calibration.firstPoint === null) {
+      calibration.firstPoint = { ...worldPos };
+      this.engine.commandBar.setStatus("IMAGE SCALE", "Click the second end of the known dimension");
+      this.requestRedraw();
+      return;
+    }
+    const distance = pointDistance(calibration.firstPoint, worldPos);
+    if (distance < 1e-9) {
+      this.engine.commandBar.setStatus("IMAGE SCALE", "The points must be different - click the second endpoint");
+      return;
+    }
+    const answer = window.prompt("Real distance between these points (in drawing units):", "240");
+    const actualDistance = answer === null ? null : Number(answer.trim());
+    if (actualDistance === null || !Number.isFinite(actualDistance) || actualDistance <= 0) {
+      this.engine.commandBar.setStatus("IMAGE SCALE", "Enter a positive distance, or press Escape to cancel");
+      return;
+    }
+    const reference = calibration.reference;
+    const before = this.engine.document.toDict();
+    const factor = actualDistance / distance;
+    const anchor = calibration.firstPoint;
+    reference.x = anchor.x + (reference.x - anchor.x) * factor;
+    reference.y = anchor.y + (reference.y - anchor.y) * factor;
+    reference.width *= factor;
+    reference.height *= factor;
+    reference.locked = true;
+    this.engine.undo.push(before);
+    this.imageCalibration = null;
+    this.engine.commandBar.setReady();
+    this.canvas.focus();
+    showToast(`Image calibrated: ${actualDistance} drawing units`);
+    this.requestRedraw();
+  }
+
   private render(): void {
     const dpr = window.devicePixelRatio || 1;
     const width = this.canvas.clientWidth;
@@ -1137,6 +1358,7 @@ export class CanvasView {
 
     if (this.engine.backdrop !== null) this.engine.backdrop(ctx);
     else this.drawGrid();
+    this.drawImageReferences();
     if (!this.engine.underlayHidden) this.drawUnderlay();
     this.drawEntities();
     this.drawConstraints();
@@ -1148,6 +1370,18 @@ export class CanvasView {
     this.drawSnapMarker();
     if (this.engine.backdrop === null) this.drawUcsIcon(); // not on a drawing sheet
     this.drawTouchOffsetCursor();
+    if (this.imageCalibration?.firstPoint !== null && this.imageCalibration !== null) {
+      const p = this.viewport.worldToScreen(this.imageCalibration.firstPoint);
+      ctx.save();
+      ctx.strokeStyle = "#00ffff";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+      ctx.moveTo(p.x - 9, p.y); ctx.lineTo(p.x + 9, p.y);
+      ctx.moveTo(p.x, p.y - 9); ctx.lineTo(p.x, p.y + 9);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     ctx.restore();
   }

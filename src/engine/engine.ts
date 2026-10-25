@@ -14,7 +14,7 @@
  * before Phase E wired the real search in here.
  */
 
-import type { Point } from "../core/types";
+import { unionBounds, type Point } from "../core/types";
 import { Document } from "../core/document";
 import { Undo } from "../core/undo";
 import { Selection } from "../core/selection";
@@ -27,6 +27,7 @@ import { QuickEditController } from "./quickEdit";
 import type { Entity } from "../entities/entity";
 import { boundsOf } from "../core/document";
 import { Dimension, DIM_TEXT_HEIGHT } from "../entities/dimension";
+import { imageReferenceBounds } from "../core/imageReference";
 
 export interface SnapResult {
   point: Point;
@@ -270,7 +271,12 @@ export class Engine {
 
   zoomExtents(): void {
     const all = [...this.document.entities, ...this.underlay];
-    this.viewport.zoomExtents(all.length > 0 ? boundsOf(all) : null);
+    let bounds = all.length > 0 ? boundsOf(all) : null;
+    for (const reference of this.document.imageReferences) {
+      const imageBounds = imageReferenceBounds(reference);
+      bounds = bounds === null ? imageBounds : unionBounds(bounds, imageBounds);
+    }
+    this.viewport.zoomExtents(bounds);
     this.requestRedraw();
   }
 

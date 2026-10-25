@@ -13,7 +13,15 @@ import type { DocumentSnapshot } from "./document";
 const MAX_UNDO_DEPTH = 100;
 
 function deepEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  if (a === b) return true;
+  if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, index) => deepEqual(value, b[index]));
+  }
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  const keys = Object.keys(aRecord);
+  return keys.length === Object.keys(bRecord).length && keys.every((key) => key in bRecord && deepEqual(aRecord[key], bRecord[key]));
 }
 
 export class Undo {

@@ -213,6 +213,11 @@ export class WorkspaceController implements ToolbarWorkspaceHost {
     });
   }
 
+  insertImage(): void {
+    if (this.deps.getSession().workspace !== "drafting") return;
+    this.deps.getView().insertImageFromFile();
+  }
+
   private loadDrawing(session: TabSession): Promise<DrawingController> {
     const have = this.drawings.get(session.id);
     if (have !== undefined) return Promise.resolve(have);

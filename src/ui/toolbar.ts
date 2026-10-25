@@ -130,6 +130,8 @@ export interface ToolbarWorkspaceHost {
   /** Open (or switch to) this model's drawing tab. */
   openDrawing(): void;
   drawingAction(action: DrawingToolAction): void;
+  /** Insert a raster image reference into the active drafting drawing. */
+  insertImage(): void;
 }
 
 /** Every toolbar button of each command, to show the running one pressed. */
@@ -470,6 +472,7 @@ function buildFileMenu(
       if (skippedCount > 0) showToast(`${skippedCount} unsupported entity type(s) were skipped.`);
     });
   });
+  addItem("Insert Image", draftingOnly, () => host.insertImage());
   addItem("Import DXF", draftingOnly, () => {
     void pickAndReadDxfFile().then((result) => {
       if (result === null) {

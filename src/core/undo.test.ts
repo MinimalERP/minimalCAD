@@ -46,6 +46,16 @@ describe("Undo", () => {
     expect(undo.canUndo()).toBe(false);
   });
 
+  it("compares embedded image snapshots without changing duplicate detection", () => {
+    const undo = new Undo();
+    const image = "data:image/png;base64," + "a".repeat(1024 * 1024);
+    const before: DocumentSnapshot = { entities: [], constraints: [], image_references: [{ data_url: image, opacity: 0.5 }] };
+    undo.push(before);
+    undo.push({ entities: [], constraints: [], image_references: [{ data_url: image, opacity: 0.5 }] });
+    expect(undo.undo({ entities: [], constraints: [] })).toEqual(before);
+    expect(undo.canUndo()).toBe(false);
+  });
+
   it("caps the undo stack at 100 entries, evicting the oldest", () => {
     const undo = new Undo();
     for (let i = 0; i < 105; i++) {

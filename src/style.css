@@ -503,6 +503,106 @@ body {
   color: #00ffff;
 }
 
+.image-reference-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid #555;
+  border-radius: 8px;
+  color: #eee;
+  background: #252526;
+  font: 13px "Segoe UI", sans-serif;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+
+.image-reference-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.52);
+}
+
+.image-reference-dialog h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.image-reference-name,
+.image-reference-hint {
+  margin: 0 0 16px;
+  color: #aaa;
+  overflow-wrap: anywhere;
+}
+
+.image-reference-hint { margin: 14px 0; font-size: 12px; }
+
+.image-reference-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.image-reference-field,
+.image-reference-opacity {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: #ccc;
+}
+
+.image-reference-field input[type="number"] {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #fff;
+  background: #1e1e1e;
+}
+
+.image-reference-opacity {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 58px 1fr 42px;
+  align-items: center;
+  gap: 8px;
+}
+
+.image-reference-opacity input { accent-color: #00bfc4; }
+.image-reference-opacity output { text-align: right; font-variant-numeric: tabular-nums; }
+
+.image-reference-lock {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ccc;
+}
+
+.image-reference-lock input { accent-color: #00bfc4; }
+
+.image-reference-buttons {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.image-reference-button {
+  padding: 7px 11px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #eee;
+  background: #333;
+  cursor: pointer;
+}
+
+.image-reference-button.primary { border-color: #00aeb3; background: #087b80; }
+.image-reference-button.danger { margin-right: auto; color: #ff9f9f; }
+.image-reference-button:hover { filter: brightness(1.15); }
+
 #command-bar .prompt-label {
   font-size: 13px;
   font-weight: bold;

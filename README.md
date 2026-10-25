@@ -29,12 +29,13 @@ npm run lint       # eslint
 ## What's implemented (v1)
 
 - **Draw**: Line, Circle, Arc, Rectangle, regular Polygon (3-1024 sides; inscribed or circumscribed), Polyline (load/render/edit only — no draw tool yet)
+- **Image tracing**: Insert an embedded raster reference from File, double-click it for opacity, lock, position, size, rotation, and two-point scale calibration; trace with ordinary CAD entities that remain independent of the image
 - **Edit**: Move, Copy (incl. array-copy count), Rotate, Scale, Mirror, Trim, Offset, Fillet (Line-Line, Line-Arc, Arc-Arc), Chamfer — every drawable entity type (Line/Circle/Arc) works with every edit command that geometrically applies to it (Fillet/Chamfer never applied to whole circles in the desktop app either — that's not a gap)
 - **Selection**: click, Shift-additive, window/crossing rubber-band, direct click-drag, Delete
 - **Grips**: line endpoint extend, line/circle move, circle radius resize
 - **Object snap — all types**: Endpoint, Intersection, Midpoint, Center, Quadrant, Perpendicular, Tangent, Center-via-curve-hover, Nearest (full priority-ordered search, matching the desktop app's own osnap system exactly)
 - Pan/zoom, adaptive grid, Ortho (F8), Home overlay button (top-right, same position/size/style as the desktop app) + Space bar, typed dynamic input (`x,y` / `dist<angle` / bare distance / arithmetic expressions), Tab-to-freeze-and-select dynamic input fields
-- Undo/redo, Save/Open as **`.jcad`** — byte-for-byte the same format as the desktop app (`file_io/jcad.py`: flat `{entities, constraints, version}` JSON, `indent=2`) — a drawing saved by either app opens correctly in the other; unsupported entity types (Ellipse/Text/Table/Dimension) are skipped gracefully on load, not fatal
+- Undo/redo, Save/Open as **`.jcad`** — flat JSON with CAD entities, constraints, and embedded image references; unsupported entity types are skipped gracefully on load, not fatal
 
 ## Known v1 scope limits (deliberate, not oversights)
 

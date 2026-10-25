@@ -11,6 +11,8 @@ import type { Bounds } from "./types";
 import { unionBounds } from "./types";
 import type { Entity } from "../entities/entity";
 import { ENTITY_TYPES } from "../entities/registry";
+import { parseImageReference, serializeImageReference } from "./imageReference";
+import type { ImageReference } from "./imageReference";
 
 export interface DocumentSnapshot {
   entities: Record<string, unknown>[];
@@ -25,6 +27,8 @@ export interface DocumentSnapshot {
   // app's own .jcad shape.
   part?: unknown;
   sheets?: unknown;
+  /** Embedded tracing-image underlays; omitted from older drawing files. */
+  image_references?: Record<string, unknown>[];
 }
 
 export interface ParseResult {
@@ -45,6 +49,7 @@ export class Document {
   /** 3D part (sketches + feature history) -- see DocumentSnapshot.part. */
   part: unknown = undefined;
   sheets: unknown = undefined;
+  imageReferences: ImageReference[] = [];
 
   getEntityById(id: string): Entity | null {
     if (this.entityMap === null) {
@@ -93,6 +98,7 @@ export class Document {
     this.constraintsDirty = true;
     this.part = undefined;
     this.sheets = undefined;
+    this.imageReferences = [];
   }
 
   getEntities(): Entity[] {
@@ -117,6 +123,7 @@ export class Document {
     };
     if (this.part !== undefined) snapshot.part = structuredClone(this.part);
     if (this.sheets !== undefined) snapshot.sheets = structuredClone(this.sheets);
+    if (this.imageReferences.length > 0) snapshot.image_references = this.imageReferences.map(serializeImageReference);
     return snapshot;
   }
 
@@ -128,6 +135,7 @@ export class Document {
     this.constraints = structuredClone(data.constraints ?? []);
     this.part = data.part === undefined ? undefined : structuredClone(data.part);
     this.sheets = data.sheets === undefined ? undefined : structuredClone(data.sheets);
+    this.imageReferences = (data.image_references ?? []).map(parseImageReference).filter((image): image is ImageReference => image !== null);
     this.entityMap = null;
     this.constraintsDirty = true;
     return result;
