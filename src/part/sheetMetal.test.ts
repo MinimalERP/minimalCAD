@@ -77,6 +77,18 @@ describe("one bend", () => {
     // The 70 mm side folded up instead.
     expect(b.max.z).toBeCloseTo(4 + (70 - ba / 2), 3);
   });
+
+  it("clips a bend line that extends past the blank even when its midpoint is outside", () => {
+    const extended: SheetBendData = {
+      line: [{ x: 70, y: 300 }, { x: 70, y: -50 }],
+      side: -1,
+      dir: "up",
+      angle: "90",
+    };
+    const r = rebuild(sheetPart([extended], {}, blank([L([70, 300], [70, -50])])), []);
+    expect(r.status.get("Sheet001")).toEqual({ ok: true });
+    expect(r.bodies).toHaveLength(1);
+  });
 });
 
 describe("several bends", () => {

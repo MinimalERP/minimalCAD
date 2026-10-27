@@ -111,6 +111,62 @@ const compose = (outer: Transform, inner: Transform): Transform => ({
 
 const sub2 = (a: Point, b: Point): Point => ({ x: a.x - b.x, y: a.y - b.y });
 const dot2 = (a: Point, b: Point): number => a.x * b.x + a.y * b.y;
+const cross2 = (a: Point, b: Point): number => a.x * b.y - a.y * b.x;
+
+/** Clip a picked bend line to the material span it crosses. A picked line may
+ *  extend past the blank, so its midpoint is not necessarily in the blank. */
+function clipBendToBlank(bend: SheetBend, regions: readonly Region[]): SheetBend | null {
+  const r = sub2(bend.b, bend.a);
+  const length = Math.hypot(r.x, r.y);
+  if (!(length > 0)) return null;
+  const parameters = [0, 1];
+  const tol = Math.max(1e-9, length * 1e-9);
+
+  for (const region of regions) {
+    for (const loop of [region.outer, ...region.holes]) {
+      const pts = loop.polygon;
+      for (let i = 0; i < pts.length; i++) {
+        const c = pts[i]!;
+        const d = pts[(i + 1) % pts.length]!;
+        const edge = sub2(d, c);
+        const offset = sub2(c, bend.a);
+        const den = cross2(r, edge);
+        if (Math.abs(den) <= tol * Math.max(1, Math.hypot(edge.x, edge.y))) {
+          if (Math.abs(cross2(offset, r)) <= tol * length) {
+            const rr = dot2(r, r);
+            parameters.push(dot2(offset, r) / rr, dot2(sub2(d, bend.a), r) / rr);
+          }
+          continue;
+        }
+        const t = cross2(offset, edge) / den;
+        const u = cross2(offset, r) / den;
+        if (t >= -1e-9 && t <= 1 + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9) {
+          parameters.push(Math.max(0, Math.min(1, t)));
+        }
+      }
+    }
+  }
+
+  const sorted = parameters.filter((t) => t >= 0 && t <= 1).sort((a, b) => a - b);
+  const cuts = sorted.filter((t, i) => i === 0 || t - sorted[i - 1]! > 1e-9);
+  const spans: [number, number][] = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const lo = cuts[i]!;
+    const hi = cuts[i + 1]!;
+    if (hi - lo <= 1e-9) continue;
+    const t = (lo + hi) / 2;
+    const p = { x: bend.a.x + r.x * t, y: bend.a.y + r.y * t };
+    if (regions.some((region) => regionContains(region, p))) spans.push([lo, hi]);
+  }
+  if (spans.length === 0) return null;
+
+  // Prefer the material span nearest the user's picked segment centre; when
+  // it lies outside the blank, use the longest crossed span.
+  const selected = spans.find(([lo, hi]) => lo <= 0.5 && hi >= 0.5) ??
+    spans.reduce((best, span) => span[1] - span[0] > best[1] - best[0] ? span : best);
+  const pointAt = (t: number): Point => ({ x: bend.a.x + r.x * t, y: bend.a.y + r.y * t });
+  return { ...bend, a: pointAt(selected[0]), b: pointAt(selected[1]) };
+}
 
 /** Regions' bounding size (for "big enough" cutting boxes). */
 function extentOf(regions: readonly Region[]): number {
@@ -163,13 +219,13 @@ export function sheetBody(spec: SheetSpec, regions: readonly Region[], frame: Fr
 
   const to3 = (p: Point, z = 0): Vec3 => add(add(add(frame.origin, scale(frame.u, p.x)), scale(frame.v, p.y)), scale(frame.n, z));
   const inside = (p: Point, keep: readonly HalfPlane[], margin: number): boolean => keep.every((h) => dot2(sub2(p, h.o), h.n) >= margin);
-  const inBlank = (p: Point): boolean => regions.some((r) => regionContains(r, p));
-
   let pieces: Piece[] = [{ body: blank, tag: "b", move: IDENTITY, keep: [] }];
   const zones: { body: Body; move: Transform; tag: string }[] = [];
 
   for (let i = 0; i < bends.length; i++) {
-    const bend = bends[i]!;
+    const clippedBend = clipBendToBlank(bends[i]!, regions);
+    if (clippedBend === null) return `Bend ${i + 1}: the bend line isn't across the blank`;
+    const bend = clippedBend;
     const n = i + 1;
     if (!(bend.angle > 0) || bend.angle > 180) return `Bend ${n}: angle must be more than 0, up to 180`;
     const len = Math.hypot(bend.b.x - bend.a.x, bend.b.y - bend.a.y);
@@ -178,7 +234,6 @@ export function sheetBody(spec: SheetSpec, regions: readonly Region[], frame: Fr
     // Fold side: left of a->b (+1) or right (-1).
     const f = { x: -d.y * bend.side, y: d.x * bend.side };
     const mid = { x: (bend.a.x + bend.b.x) / 2, y: (bend.a.y + bend.b.y) / 2 };
-    if (!inBlank(mid)) return `Bend ${n}: the bend line isn't across the blank`;
     const ba = bendAllowance(bend.angle, R, T, k);
     const half = ba / 2;
 
